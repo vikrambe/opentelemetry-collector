@@ -12,22 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package opencensusreceiver
+package zipkin
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+// These constants are the attribute keys used when translating from zipkin
+// format to the internal collector data format.
+const (
+	LocalEndpointIPv4         = "ipv4"
+	LocalEndpointIPv6         = "ipv6"
+	LocalEndpointPort         = "port"
+	LocalEndpointServiceName  = "serviceName"
+	RemoteEndpointIPv4        = "zipkin.remoteEndpoint.ipv4"
+	RemoteEndpointIPv6        = "zipkin.remoteEndpoint.ipv6"
+	RemoteEndpointPort        = "zipkin.remoteEndpoint.port"
+	RemoteEndpointServiceName = "zipkin.remoteEndpoint.serviceName"
 )
-
-func TestNoopOption(t *testing.T) {
-	plainReceiver := new(Receiver)
-
-	subjectReceiver := new(Receiver)
-	opts := []Option{noopOption(0), noopOption(0)}
-	for _, opt := range opts {
-		opt.withReceiver(subjectReceiver)
-	}
-
-	require.Equal(t, plainReceiver, subjectReceiver, "noopOption has side effects")
-}

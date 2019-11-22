@@ -27,6 +27,9 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
+	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/stats"
+	"go.opencensus.io/tag"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
@@ -58,13 +61,14 @@ type transaction struct {
 	instance           string
 	jobsMap            *JobsMap
 	useStartTimeMetric bool
+	receiverName       string
 	ms                 MetadataService
 	node               *commonpb.Node
 	metricBuilder      *metricBuilder
-	logger             *zap.SugaredLogger
+	logger             *zap.Logger
 }
 
-func newTransaction(ctx context.Context, jobsMap *JobsMap, useStartTimeMetric bool, ms MetadataService, sink consumer.MetricsConsumer, logger *zap.SugaredLogger) *transaction {
+func newTransaction(ctx context.Context, jobsMap *JobsMap, useStartTimeMetric bool, receiverName string, ms MetadataService, sink consumer.MetricsConsumer, logger *zap.Logger) *transaction {
 	return &transaction{
 		id:                 atomic.AddInt64(&idSeq, 1),
 		ctx:                ctx,
@@ -72,6 +76,7 @@ func newTransaction(ctx context.Context, jobsMap *JobsMap, useStartTimeMetric bo
 		sink:               sink,
 		jobsMap:            jobsMap,
 		useStartTimeMetric: useStartTimeMetric,
+		receiverName:       receiverName,
 		ms:                 ms,
 		logger:             logger,
 	}
@@ -143,6 +148,15 @@ func (tr *transaction) Commit() error {
 	observability.RecordMetricsForMetricsReceiver(tr.ctx, numTimeseries, droppedTimeseries)
 	if err != nil {
 		return err
+	}
+
+	if tr.metricBuilder.hasInternalMetric {
+		m := ochttp.ClientRoundtripLatency.M(tr.metricBuilder.scrapeLatencyMs)
+		stats.RecordWithTags(tr.ctx, []tag.Mutator{
+			tag.Upsert(observability.TagKeyReceiver, tr.receiverName),
+			tag.Upsert(ochttp.KeyClientStatus, tr.metricBuilder.scrapeStatus),
+		}, m)
+
 	}
 
 	if tr.useStartTimeMetric {

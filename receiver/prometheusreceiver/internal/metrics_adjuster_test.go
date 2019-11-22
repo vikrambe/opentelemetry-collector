@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	mtu "github.com/open-telemetry/opentelemetry-collector/internal/metricstestutils"
+	mtu "github.com/open-telemetry/opentelemetry-collector/testutils/metricstestutils"
 )
 
 func Test_gauge(t *testing.T) {
@@ -317,6 +317,8 @@ func Test_jobGC(t *testing.T) {
 	time.Sleep(2 * gcInterval)
 	// re-run job 2, round1 - trigger job gc, removing unmarked entries
 	runScript(t, jobsMap.get("job", "1"), job2Script1)
+	// ensure that at least one jobsMap.gc() completed
+	jobsMap.gc()
 	// run job 1, round 2 - verify that all job 1 timeseries have been gc'd
 	runScript(t, jobsMap.get("job", "0"), job1Script2)
 }
@@ -364,7 +366,7 @@ func (mat *metricsAdjusterTest) dropped() int {
 func runScript(t *testing.T, tsm *timeseriesMap, script []*metricsAdjusterTest) {
 	l := zap.NewNop()
 	defer l.Sync() // flushes buffer, if any
-	ma := NewMetricsAdjuster(tsm, l.Sugar())
+	ma := NewMetricsAdjuster(tsm, l)
 
 	for _, test := range script {
 		expectedDropped := test.dropped()

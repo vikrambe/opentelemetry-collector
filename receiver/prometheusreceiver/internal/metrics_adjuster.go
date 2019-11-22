@@ -140,10 +140,13 @@ func NewJobsMap(gcInterval time.Duration) *JobsMap {
 func (jm *JobsMap) gc() {
 	jm.Lock()
 	defer jm.Unlock()
-	// once the structure is locked, confrim that gc() is still necessary
+	// once the structure is locked, confirm that gc() is still necessary
 	if time.Since(jm.lastGC) > jm.gcInterval {
 		for sig, tsm := range jm.jobsMap {
-			if !tsm.mark {
+			tsm.RLock()
+			tsmNotMarked := !tsm.mark
+			tsm.RUnlock()
+			if tsmNotMarked {
 				delete(jm.jobsMap, sig)
 			} else {
 				tsm.gc()
@@ -155,6 +158,8 @@ func (jm *JobsMap) gc() {
 
 func (jm *JobsMap) maybeGC() {
 	// speculatively check if gc() is necessary, recheck once the structure is locked
+	jm.RLock()
+	defer jm.RUnlock()
 	if time.Since(jm.lastGC) > jm.gcInterval {
 		go jm.gc()
 	}
@@ -185,11 +190,11 @@ func (jm *JobsMap) get(job, instance string) *timeseriesMap {
 // the initial points.
 type MetricsAdjuster struct {
 	tsm    *timeseriesMap
-	logger *zap.SugaredLogger
+	logger *zap.Logger
 }
 
 // NewMetricsAdjuster is a constructor for MetricsAdjuster.
-func NewMetricsAdjuster(tsm *timeseriesMap, logger *zap.SugaredLogger) *MetricsAdjuster {
+func NewMetricsAdjuster(tsm *timeseriesMap, logger *zap.Logger) *MetricsAdjuster {
 	return &MetricsAdjuster{
 		tsm:    tsm,
 		logger: logger,
@@ -280,9 +285,8 @@ func (ma *MetricsAdjuster) adjustTimeseries(metricType metricspb.MetricDescripto
 func (ma *MetricsAdjuster) adjustPoints(metricType metricspb.MetricDescriptor_Type,
 	current, initial, previous []*metricspb.Point) bool {
 	if len(current) != 1 || len(initial) != 1 || len(current) != 1 {
-		ma.logger.Infof(
-			"len(current): %v, len(initial): %v, len(previous): %v should all be 1",
-			len(current), len(initial), len(previous))
+		ma.logger.Info("Adjusting Points, all lengths should be 1",
+			zap.Int("len(current)", len(current)), zap.Int("len(initial)", len(initial)), zap.Int("len(previous)", len(previous)))
 		return true
 	}
 	return ma.adjustPoint(metricType, current[0], initial[0], previous[0])
@@ -350,7 +354,7 @@ func (ma *MetricsAdjuster) adjustPoint(metricType metricspb.MetricDescriptor_Typ
 			&wrappers.DoubleValue{Value: currentSum - initialSum}
 	default:
 		// this shouldn't happen
-		ma.logger.Infof("adjust unexpect point type %v, skipping ...", metricType.String())
+		ma.logger.Info("Adjust - skipping unexpected point", zap.String("type", metricType.String()))
 	}
 	return true
 }
@@ -358,8 +362,7 @@ func (ma *MetricsAdjuster) adjustPoint(metricType metricspb.MetricDescriptor_Typ
 func (ma *MetricsAdjuster) adjustBuckets(current, initial []*metricspb.DistributionValue_Bucket) {
 	if len(current) != len(initial) {
 		// this shouldn't happen
-		ma.logger.Infof("len(current buckets): %v != len(initial buckets): %v",
-			len(current), len(initial))
+		ma.logger.Info("Bucket sizes not equal", zap.Int("len(current)", len(current)), zap.Int("len(initial)", len(initial)))
 	}
 	for i := 0; i < len(current); i++ {
 		current[i].Count -= initial[i].Count

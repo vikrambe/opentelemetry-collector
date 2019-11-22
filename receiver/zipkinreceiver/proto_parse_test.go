@@ -16,7 +16,6 @@ package zipkinreceiver
 
 import (
 	"net/http"
-	"reflect"
 	"testing"
 	"time"
 
@@ -24,9 +23,12 @@ import (
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	"github.com/golang/protobuf/proto"
 	zipkin_proto3 "github.com/openzipkin/zipkin-go/proto/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/internal"
+	"github.com/open-telemetry/opentelemetry-collector/translator/trace/zipkin"
 )
 
 func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
@@ -96,36 +98,21 @@ func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
 
 	// 2. Serialize it
 	protoBlob, err := proto.Marshal(payloadFromWild)
-	if err != nil {
-		t.Fatalf("Failed to protobuf serialize payload: %v", err)
-	}
+	require.NoError(t, err, "Failed to protobuf serialize payload: %v", err)
 	zi := new(ZipkinReceiver)
 	hdr := make(http.Header)
 	hdr.Set("Content-Type", "application/x-protobuf")
 
 	// 3. Get that payload converted to OpenCensus proto spans.
 	reqs, err := zi.v2ToTraceSpans(protoBlob, hdr)
-	if err != nil {
-		t.Fatalf("Failed to parse convert Zipkin spans in Protobuf to Trace spans: %v", err)
-	}
-
-	if g, w := len(reqs), 2; g != w {
-		t.Fatalf("Expecting exactly 2 requests since spans have different node/localEndpoint: %v", g)
-	}
+	require.NoError(t, err, "Failed to parse convert Zipkin spans in Protobuf to Trace spans: %v", err)
+	require.Len(t, reqs, 2, "Expecting exactly 2 requests since spans have different node/localEndpoint: %v", len(reqs))
 
 	want := []consumerdata.TraceData{
 		{
 			Node: &commonpb.Node{
 				ServiceInfo: &commonpb.ServiceInfo{
 					Name: "svc-1",
-				},
-				Attributes: map[string]string{
-					"ipv4":                              "192.168.0.1",
-					"serviceName":                       "svc-1",
-					"port":                              "8009",
-					"zipkin.remoteEndpoint.serviceName": "memcached",
-					"zipkin.remoteEndpoint.ipv6":        "fe80::1453:a77c:da4d:d21b",
-					"zipkin.remoteEndpoint.port":        "11211",
 				},
 			},
 			Spans: []*tracepb.Span{
@@ -136,6 +123,15 @@ func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
 					Name:         &tracepb.TruncatableString{Value: "ProtoSpan1"},
 					StartTime:    internal.TimeToTimestamp(now),
 					EndTime:      internal.TimeToTimestamp(now.Add(12 * time.Second)),
+					Attributes: &tracepb.Span_Attributes{
+						AttributeMap: map[string]*tracepb.AttributeValue{
+							zipkin.LocalEndpointIPv4:         {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "192.168.0.1"}}},
+							zipkin.LocalEndpointPort:         {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "8009"}}},
+							zipkin.RemoteEndpointServiceName: {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "memcached"}}},
+							zipkin.RemoteEndpointIPv6:        {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "fe80::1453:a77c:da4d:d21b"}}},
+							zipkin.RemoteEndpointPort:        {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "11211"}}},
+						},
+					},
 				},
 			},
 		},
@@ -143,14 +139,6 @@ func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
 			Node: &commonpb.Node{
 				ServiceInfo: &commonpb.ServiceInfo{
 					Name: "search",
-				},
-				Attributes: map[string]string{
-					"ipv4":                              "10.0.0.13",
-					"serviceName":                       "search",
-					"port":                              "8009",
-					"zipkin.remoteEndpoint.serviceName": "redis",
-					"zipkin.remoteEndpoint.ipv6":        "fe80::1453:a77c:da4d:d21b",
-					"zipkin.remoteEndpoint.port":        "6379",
 				},
 			},
 			Spans: []*tracepb.Span{
@@ -161,6 +149,15 @@ func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
 					Name:         &tracepb.TruncatableString{Value: "CacheWarmUp"},
 					StartTime:    internal.TimeToTimestamp(now.Add(-10 * time.Hour)),
 					EndTime:      internal.TimeToTimestamp(now.Add(-10 * time.Hour).Add(7 * time.Second)),
+					Attributes: &tracepb.Span_Attributes{
+						AttributeMap: map[string]*tracepb.AttributeValue{
+							zipkin.LocalEndpointIPv4:         {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "10.0.0.13"}}},
+							zipkin.LocalEndpointPort:         {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "8009"}}},
+							zipkin.RemoteEndpointServiceName: {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "redis"}}},
+							zipkin.RemoteEndpointIPv6:        {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "fe80::1453:a77c:da4d:d21b"}}},
+							zipkin.RemoteEndpointPort:        {Value: &tracepb.AttributeValue_StringValue{StringValue: &tracepb.TruncatableString{Value: "6379"}}},
+						},
+					},
 					TimeEvents: &tracepb.Span_TimeEvents{
 						TimeEvent: []*tracepb.Span_TimeEvent{
 							{
@@ -190,7 +187,5 @@ func TestConvertSpansToTraceSpans_protobuf(t *testing.T) {
 		},
 	}
 
-	if g, w := reqs, want; !reflect.DeepEqual(g, w) {
-		t.Errorf("Got:\n\t%v\nWant:\n\t%v", g, w)
-	}
+	assert.Equal(t, want, reqs)
 }

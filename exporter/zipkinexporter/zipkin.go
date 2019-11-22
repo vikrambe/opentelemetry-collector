@@ -16,6 +16,7 @@ package zipkinexporter
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -23,6 +24,7 @@ import (
 
 	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	zipkinmodel "github.com/openzipkin/zipkin-go/model"
+	zipkinproto "github.com/openzipkin/zipkin-go/proto/v2"
 	zipkinreporter "github.com/openzipkin/zipkin-go/reporter"
 	zipkinhttp "github.com/openzipkin/zipkin-go/reporter/http"
 	"go.opencensus.io/trace"
@@ -33,6 +35,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/observability"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
 	spandatatranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace/spandata"
+	"github.com/open-telemetry/opentelemetry-collector/translator/trace/zipkin"
 )
 
 // zipkinExporter is a multiplexing exporter that spawns a new OpenCensus-Go Zipkin
@@ -55,10 +58,19 @@ const (
 	DefaultZipkinEndpointURL      = "http://" + DefaultZipkinEndpointHostPort + "/api/v2/spans"
 )
 
-func newZipkinExporter(finalEndpointURI, defaultServiceName string, uploadPeriod time.Duration) (*zipkinExporter, error) {
+func newZipkinExporter(finalEndpointURI, defaultServiceName string, uploadPeriod time.Duration, format string) (*zipkinExporter, error) {
 	var opts []zipkinhttp.ReporterOption
 	if uploadPeriod > 0 {
 		opts = append(opts, zipkinhttp.BatchInterval(uploadPeriod))
+	}
+	// default is json
+	switch format {
+	case "json":
+		break
+	case "proto":
+		opts = append(opts, zipkinhttp.Serializer(zipkinproto.SpanSerializer{}))
+	default:
+		return nil, fmt.Errorf("%s is not one of json or proto", format)
 	}
 	reporter := zipkinhttp.NewReporter(finalEndpointURI, opts...)
 	zle := &zipkinExporter{
@@ -68,15 +80,20 @@ func newZipkinExporter(finalEndpointURI, defaultServiceName string, uploadPeriod
 	return zle, nil
 }
 
-func lookupAttribute(node *commonpb.Node, key string) string {
-	if node == nil {
-		return ""
-	}
-	return node.Attributes[key]
-}
+// zipkinEndpointFromAttributes extracts zipkin endpoint information
+// from a set of attributes (in the format of OC SpanData). It returns the built
+// zipkin endpoint and insert the attribute keys that were made redundant
+// (because now they can be represented by the endpoint) into the redundantKeys
+// map (function assumes that this was created by the caller). Per call at most
+// 3 attribute keys can be made redundant.
+func zipkinEndpointFromAttributes(
+	attributes map[string]interface{},
+	serviceName string,
+	endpointType zipkinDirection,
+	redundantKeys map[string]bool,
+) (endpoint *zipkinmodel.Endpoint) {
 
-func zipkinEndpointFromNode(node *commonpb.Node, serviceName string, endpointType zipkinDirection) *zipkinmodel.Endpoint {
-	if node == nil {
+	if attributes == nil {
 		return nil
 	}
 
@@ -86,25 +103,32 @@ func zipkinEndpointFromNode(node *commonpb.Node, serviceName string, endpointTyp
 	//      "port": "9000",
 	//      "serviceName": "backend",
 	// }
-	attributes := node.Attributes
 
 	var ipv4Key, ipv6Key, portKey string
 	if endpointType == isLocalEndpoint {
-		ipv4Key, ipv6Key, portKey = "ipv4", "ipv6", "port"
+		ipv4Key, ipv6Key, portKey = zipkin.LocalEndpointIPv4, zipkin.LocalEndpointIPv6, zipkin.LocalEndpointPort
 	} else {
-		ipv4Key, ipv6Key, portKey = "zipkin.remoteEndpoint.ipv4", "zipkin.remoteEndpoint.ipv6", "zipkin.remoteEndpoint.port"
+		ipv4Key, ipv6Key, portKey = zipkin.RemoteEndpointIPv4, zipkin.RemoteEndpointIPv6, zipkin.RemoteEndpointPort
 	}
 
 	var ip net.IP
 	ipv6Selected := false
-	if ipv4 := attributes[ipv4Key]; ipv4 != "" {
-		ip = net.ParseIP(ipv4)
-	} else if ipv6 := attributes[ipv6Key]; ipv6 != "" {
-		ip = net.ParseIP(ipv6)
+
+	if ipv4Str, ok := extractStringAttribute(attributes, ipv4Key); ok {
+		ip = net.ParseIP(ipv4Str)
+		redundantKeys[ipv4Key] = true
+	} else if ipv6Str, ok := extractStringAttribute(attributes, ipv6Key); ok {
+		ip = net.ParseIP(ipv6Str)
 		ipv6Selected = true
+		redundantKeys[ipv6Key] = true
 	}
 
-	port, _ := strconv.ParseUint(attributes[portKey], 10, 16)
+	var port uint64
+	if portStr, ok := extractStringAttribute(attributes, portKey); ok {
+		port, _ = strconv.ParseUint(portStr, 10, 16)
+		redundantKeys[portKey] = true
+	}
+
 	if serviceName == "" && len(ip) == 0 && port == 0 {
 		// Nothing to put on the endpoint
 		return nil
@@ -122,6 +146,18 @@ func zipkinEndpointFromNode(node *commonpb.Node, serviceName string, endpointTyp
 	}
 
 	return zEndpoint
+}
+
+func extractStringAttribute(
+	attributes map[string]interface{},
+	key string,
+) (value string, ok bool) {
+	var i interface{}
+	if i, ok = attributes[key]; ok {
+		value, ok = i.(string)
+	}
+
+	return value, ok
 }
 
 func (ze *zipkinExporter) Name() string {
@@ -263,14 +299,27 @@ const (
 	isRemoteEndpoint zipkinDirection = false
 )
 
-const zipkinRemoteEndpointKey = "zipkin.remoteEndpoint.serviceName"
+func (ze *zipkinExporter) zipkinSpan(
+	node *commonpb.Node,
+	s *trace.SpanData,
+) (zc zipkinmodel.SpanModel) {
 
-func (ze *zipkinExporter) zipkinSpan(node *commonpb.Node, s *trace.SpanData) (zc zipkinmodel.SpanModel) {
+	// Per call to zipkinEndpointFromAttributes at most 3 attribute keys can be
+	// made redundant, give a hint when calling make that we expect at most 6
+	// items on the map.
+	redundantKeys := make(map[string]bool, 6)
 	localEndpointServiceName := ze.serviceNameOrDefault(node)
-	localEndpoint := zipkinEndpointFromNode(node, localEndpointServiceName, isLocalEndpoint)
+	localEndpoint := zipkinEndpointFromAttributes(
+		s.Attributes, localEndpointServiceName, isLocalEndpoint, redundantKeys)
 
-	remoteServiceName := lookupAttribute(node, zipkinRemoteEndpointKey)
-	remoteEndpoint := zipkinEndpointFromNode(node, remoteServiceName, isRemoteEndpoint)
+	remoteServiceName := ""
+	if remoteServiceEntry, ok := s.Attributes[zipkin.RemoteEndpointServiceName]; ok {
+		if remoteServiceName, ok = remoteServiceEntry.(string); ok {
+			redundantKeys[zipkin.RemoteEndpointServiceName] = true
+		}
+	}
+	remoteEndpoint := zipkinEndpointFromAttributes(
+		s.Attributes, remoteServiceName, isRemoteEndpoint, redundantKeys)
 
 	sc := s.SpanContext
 	z := zipkinmodel.SpanModel{
@@ -300,6 +349,12 @@ func (ze *zipkinExporter) zipkinSpan(node *commonpb.Node, s *trace.SpanData) (zc
 	if len(s.Attributes) != 0 {
 		m := make(map[string]string, len(s.Attributes)+2)
 		for key, value := range s.Attributes {
+			if redundantKeys[key] {
+				// Already represented by something other than an attribute,
+				// skip it.
+				continue
+			}
+
 			switch v := value.(type) {
 			case string:
 				m[key] = v
