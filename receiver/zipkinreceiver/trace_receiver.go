@@ -602,12 +602,11 @@ func zipkinTagsToTraceAttributes(tags map[string]string) *tracepb.Span_Attribute
 		return nil
 	}
 
-	amap := make(map[string]*tracepb.AttributeValue, len(tags))
 	httpKey := "http.status_code"
-	httpStatusCode,_ := strconv.Atoi(tags[httpKey])
+	httpStatusCode, _ := strconv.Atoi(tags[httpKey])
 
-	if httpStatusCode >= 500{
-		tags["error"]="true"
+	if httpStatusCode >= 500 {
+		tags["error"] = "true"
 	}
 
 	amap := make(map[string]*tracepb.AttributeValue, len(tags))
