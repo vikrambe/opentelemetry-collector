@@ -603,6 +603,14 @@ func zipkinTagsToTraceAttributes(tags map[string]string) *tracepb.Span_Attribute
 	}
 
 	amap := make(map[string]*tracepb.AttributeValue, len(tags))
+	httpKey := "http.status_code"
+	httpStatusCode,_ := strconv.Atoi(tags[httpKey])
+
+	if httpStatusCode >= 500{
+		tags["error"]="true"
+	}
+
+	amap := make(map[string]*tracepb.AttributeValue, len(tags))
 	for key, value := range tags {
 		// We did a translation from "boolean" to "string"
 		// in OpenCensus-Go's Zipkin exporter as per
