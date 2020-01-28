@@ -23,6 +23,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/exporter/loggingexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/opencensusexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/prometheusexporter"
+	"github.com/open-telemetry/opentelemetry-collector/exporter/splunkexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/zipkinexporter"
 	"github.com/open-telemetry/opentelemetry-collector/extension"
 	"github.com/open-telemetry/opentelemetry-collector/extension/healthcheckextension"
@@ -79,6 +80,7 @@ func Components() (
 		&zipkinexporter.Factory{},
 		&jaegergrpcexporter.Factory{},
 		&jaegerthrifthttpexporter.Factory{},
+		&splunkexporter.Factory{},
 	)
 	if err != nil {
 		errs = append(errs, err)
