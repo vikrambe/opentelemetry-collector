@@ -81,6 +81,22 @@ func NewTraceExporter(logger *zap.Logger, config configmodels.Exporter) (exporte
 	return zexp, nil
 }
 
+func CreateZipkinExporter(config configmodels.Exporter) (*zipkinExporter, error) {
+
+
+	serviceName := defaultServiceName
+
+
+	ze := &zipkinExporter{
+		defaultServiceName: serviceName,
+		url:                "",
+		client:             &http.Client{Timeout: defaultTimeout},
+	}
+	ze.serializer = zipkinproto.SpanSerializer{}
+
+	return ze, nil
+}
+
 func createZipkinExporter(logger *zap.Logger, config configmodels.Exporter) (*zipkinExporter, error) {
 	zCfg := config.(*Config)
 
@@ -194,7 +210,7 @@ func (ze *zipkinExporter) PushTraceData(ctx context.Context, td consumerdata.Tra
 		if err != nil {
 			return len(td.Spans), consumererror.Permanent(err)
 		}
-		zs := ze.zipkinSpan(td.Node, sd)
+		zs := ze.ZipkinSpan(td.Node, sd)
 		tbatch = append(tbatch, &zs)
 	}
 
@@ -311,7 +327,7 @@ const (
 	isRemoteEndpoint zipkinDirection = false
 )
 
-func (ze *zipkinExporter) zipkinSpan(
+func (ze *zipkinExporter) ZipkinSpan(
 	node *commonpb.Node,
 	s *trace.SpanData,
 ) (zc zipkinmodel.SpanModel) {
