@@ -1,0 +1,23 @@
+receivers:
+  examplereceiver:
+
+processors:
+  exampleprocessor:
+
+exporters:
+  splunk:
+    http_event_controller: ""
+    token: ""
+    splunk_index: ""
+    source: ""
+    source_type: ""
+
+service:
+  pipelines:
+    traces:
+      receivers: [examplereceiver]
+      processors: [exampleprocessor]
+      exporters: [splunk]
+    metrics:
+      receivers: [examplereceiver]
+      exporters: [splunk]
