@@ -18,6 +18,7 @@ package defaults
 import (
 	"github.com/open-telemetry/opentelemetry-collector/config"
 	"github.com/open-telemetry/opentelemetry-collector/exporter"
+	"github.com/open-telemetry/opentelemetry-collector/exporter/fileexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/jaeger/jaegergrpcexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/jaeger/jaegerthrifthttpexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/loggingexporter"
@@ -36,6 +37,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/processor/queuedprocessor"
 	"github.com/open-telemetry/opentelemetry-collector/processor/samplingprocessor/probabilisticsamplerprocessor"
 	"github.com/open-telemetry/opentelemetry-collector/processor/samplingprocessor/tailsamplingprocessor"
+	"github.com/open-telemetry/opentelemetry-collector/processor/spanprocessor"
 	"github.com/open-telemetry/opentelemetry-collector/receiver"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/jaegerreceiver"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/opencensusreceiver"
@@ -79,6 +81,7 @@ func Components() (
 		&zipkinexporter.Factory{},
 		&jaegergrpcexporter.Factory{},
 		&jaegerthrifthttpexporter.Factory{},
+		&fileexporter.Factory{},
 	)
 	if err != nil {
 		errs = append(errs, err)
@@ -91,6 +94,7 @@ func Components() (
 		&memorylimiter.Factory{},
 		&tailsamplingprocessor.Factory{},
 		&probabilisticsamplerprocessor.Factory{},
+		&spanprocessor.Factory{},
 	)
 	if err != nil {
 		errs = append(errs, err)
