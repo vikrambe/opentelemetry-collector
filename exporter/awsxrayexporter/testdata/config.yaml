@@ -1,0 +1,22 @@
+receivers:
+  examplereceiver:
+
+processors:
+  exampleprocessor:
+
+exporters:
+  awsxray:
+  awsxray/customname:
+    region: us-west-2
+    resource_arn: "arn:aws:kms:us-west-2:010446465188:key/1e2f370b-3a9c-4b50-ab25-f96168f31a58"
+    role_arn: "arn:aws:kms:us-west-2:010446465188:key/1e2f370b-3a9c-4b50-ab25-f96168f31a58"
+  awsxray/disabled: # will be ignored
+    disabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [examplereceiver]
+      processors: [exampleprocessor]
+      exporters: [awsxray]
+

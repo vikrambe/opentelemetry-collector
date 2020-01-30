@@ -76,6 +76,7 @@ func TestDefaultComponents(t *testing.T) {
 		"zipkin":             &zipkinexporter.Factory{},
 		"jaeger_grpc":        &jaegergrpcexporter.Factory{},
 		"jaeger_thrift_http": &jaegerthrifthttpexporter.Factory{},
+		"awsxrayexporter":    &awsxrayexporter.Factory{},
 	}
 
 	factories, err := Components()
