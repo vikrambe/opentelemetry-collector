@@ -12,6 +12,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
 
     stage('Docker Build') {
           container('docker') {
+            sh 'apt-get update && apt-get install make'
             sh 'make otelcol'
             sh 'make docker-otelcol'
             }
