@@ -26,4 +26,3 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
     }
 
   }
-} 
