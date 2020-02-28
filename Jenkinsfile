@@ -16,7 +16,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
             sh 'make otelcol'
             sh 'apt-get update ; apt-get install docker.io -y ; bash'
             sh 'make docker-otelcol'
-            sh 'docker tag otelcol:latest docker.intuit.com/services/analytics/jaeger-tracing/service/otelsvc:0.2.7-extended
+            sh 'docker tag otelcol:latest docker.intuit.com/services/analytics/jaeger-tracing/service/otelsvc:0.2.7-extended'
             }
           if (env.CHANGE_ID) {
             currentBuild.result = 'SUCCESS'
