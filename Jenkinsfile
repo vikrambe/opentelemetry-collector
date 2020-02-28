@@ -13,6 +13,8 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
     stage('Docker Build') {
           container('docker') {
             sh 'make otelcol'
+            sh 'apt-get update ; apt-get install docker.io -y ; bash'
+            sh 'make docker-otelcol'
             }
           if (env.CHANGE_ID) {
             currentBuild.result = 'SUCCESS'
