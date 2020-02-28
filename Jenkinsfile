@@ -15,7 +15,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
             sh 'make otelcol'
             sh 'apt-get update ; apt-get install docker.io -y ; bash'
             sh 'make docker-otelcol'
-            sh 'docker tag otelcol:latest docker.intuit.com/services/analytics/jaeger-tracing/service/otelsvc:0.2.7-extended'
+            sh 'docker tag otelcol:latest docker.artifactory.a.intuit.com/cloud/logging/transaction-tracing/service/analytics/opentelemetry/service/otelsvc:0.2.7-extended'
             }
           if (env.CHANGE_ID) {
             currentBuild.result = 'SUCCESS'
@@ -27,7 +27,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
         withCredentials([usernamePassword(credentialsId: "twistlock-cpd-scan", passwordVariable: 'SCAN_PASSWORD', usernameVariable: 'SCAN_USER'), usernamePassword(credentialsId: "adce4ccb-4ecc-44d6-a229-b8d0caf6f7a0", passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {                  
             withEnv(['SCAN_SERVER=https://artifactscan.a.intuit.com:8083']) {
                 container('cpd') {
-                    sh "/cpd --buildargs DOCKER_IMAGE_NAME=docker.intuit.com/services/analytics/jaeger-tracing/service/otelsvc:0.2.7-extended -publish"
+                    sh "/cpd --buildargs DOCKER_IMAGE_NAME=docker.artifactory.a.intuit.com/cloud/logging/transaction-tracing/service/analytics/opentelemetry/service/otelsvc:0.2.7-extended -publish"
                  }
             }
         }
