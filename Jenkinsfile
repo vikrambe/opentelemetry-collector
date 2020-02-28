@@ -1,10 +1,4 @@
 def label = "opentelemetry-container-${UUID.randomUUID().toString()}"
-@Library('msaas-shared-lib') _
-
-node {
-  // setup the global static configuration
-  config = setupMsaasPipeline('build-config.yaml')
-}
 
 
 podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVolume(hostPath: '/var/run/dind/docker.sock', mountPath: '/var/run/docker.sock')], containers:[
@@ -31,7 +25,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
     }
       
        stage('CPD Certification') {
-        withCredentials([usernamePassword(credentialsId: "twistlock-cpd-scan", passwordVariable: 'SCAN_PASSWORD', usernameVariable: 'SCAN_USER'), usernamePassword(credentialsId: "adce4ccb-4ecc-44d6-a229-b8d0caf6f7a0", passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {                  
+        withCredentials([usernamePassword(credentialsId: "twistlock-cpd-scan", passwordVariable: 'SCAN_PASSWORD', usernameVariable: 'SCAN_USER'), usernamePassword(credentialsId: "artifactory-jaeger", passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {                  
             withEnv(['SCAN_SERVER=https://artifactscan.a.intuit.com:8083']) {
                 container('cpd') {
                     sh "/cpd --buildargs DOCKER_IMAGE_NAME=docker.artifactory.a.intuit.com/cloud/logging/transaction-tracing/service/analytics/opentelemetry/service/otelsvc:0.2.7-extended -publish"
