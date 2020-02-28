@@ -2,7 +2,7 @@
 
 node {
   // setup the global static configuration
-  config = setupMsaasPipeline('msaas-config.yaml')
+  config = setupMsaasPipeline('build-config.yaml')
 }
 
 def label = "opentelemetry-container-${UUID.randomUUID().toString()}"
