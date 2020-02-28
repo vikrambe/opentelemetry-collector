@@ -12,8 +12,7 @@ podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVol
 
     stage('Docker Build') {
           container('docker') {
-            sh 'docker run --rm -v "$PWD":/usr/src/myapp -w /usr/src/myapp golang:1.13 make otelcol'
-            sh 'docker run --rm -v "$PWD":/usr/src/myapp -w /usr/src/myapp golang:1.13 make docker-otelcol'
+            sh 'make otelcol'
             }
           if (env.CHANGE_ID) {
             currentBuild.result = 'SUCCESS'
