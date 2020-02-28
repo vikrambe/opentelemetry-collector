@@ -1,11 +1,6 @@
-@Library('msaas-shared-lib') _
-
-node {
-  // setup the global static configuration
-  config = setupMsaasPipeline('build-config.yaml')
-}
-
 def label = "opentelemetry-container-${UUID.randomUUID().toString()}"
+def asset_id = 2093065519126984373
+
 
 podTemplate(name: "opentelemetry-container", label: label, volumes: [hostPathVolume(hostPath: '/var/run/dind/docker.sock', mountPath: '/var/run/docker.sock')], containers:[
   containerTemplate(name: 'docker', image: 'golang:1.13', ttyEnabled: true, command: 'cat', args: '' ),
