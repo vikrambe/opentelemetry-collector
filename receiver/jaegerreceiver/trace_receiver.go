@@ -38,12 +38,9 @@ import (
 	"github.com/jaegertracing/jaeger/proto-gen/api_v2"
 	"github.com/jaegertracing/jaeger/thrift-gen/baggage"
 	"github.com/jaegertracing/jaeger/thrift-gen/jaeger"
-	jaegerThrift "github.com/jaegertracing/jaeger/thrift-gen/jaeger"
 	"github.com/jaegertracing/jaeger/thrift-gen/sampling"
 	"github.com/jaegertracing/jaeger/thrift-gen/zipkincore"
 	"github.com/uber/jaeger-lib/metrics"
-	"github.com/uber/tchannel-go"
-	"github.com/uber/tchannel-go/thrift"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
@@ -52,7 +49,6 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
 	"github.com/open-telemetry/opentelemetry-collector/oterr"
-	"github.com/open-telemetry/opentelemetry-collector/receiver"
 	jaegertranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace/jaeger"
 )
 
@@ -82,7 +78,7 @@ type jReceiver struct {
 	// mu protects the fields of this type
 	mu sync.Mutex
 
-	nextConsumer consumer.TraceConsumer
+	nextConsumer consumer.TraceConsumerOld
 	instanceName string
 
 	startOnce sync.Once
@@ -91,7 +87,6 @@ type jReceiver struct {
 	config *Configuration
 
 	grpc            *grpc.Server
-	tchanServer     *jTchannelReceiver
 	collectorServer *http.Server
 
 	agentSamplingManager *jSamplingConfig.SamplingManager
@@ -102,27 +97,18 @@ type jReceiver struct {
 	logger          *zap.Logger
 }
 
-type jTchannelReceiver struct {
-	nextConsumer consumer.TraceConsumer
-	instanceName string
-
-	tchannel *tchannel.Channel
-}
-
 const (
 	defaultAgentQueueSize     = 1000
 	defaultAgentMaxPacketSize = 65000
 	defaultAgentServerWorkers = 10
 
 	// Legacy metrics receiver name tag values
-	collectorReceiverTagValue         = "jaeger-collector"
-	tchannelCollectorReceiverTagValue = "jaeger-tchannel-collector"
-	agentReceiverTagValue             = "jaeger-agent"
+	collectorReceiverTagValue = "jaeger-collector"
+	agentReceiverTagValue     = "jaeger-agent"
 
-	agentTransport             = "agent" // This is not 100% precise since it can be either compact or binary.
-	collectorHTTPTransport     = "collector_http"
-	collectorTChannelTransport = "collector_tchannel"
-	grpcTransport              = "grpc"
+	agentTransport         = "agent" // This is not 100% precise since it can be either compact or binary.
+	collectorHTTPTransport = "collector_http"
+	grpcTransport          = "grpc"
 
 	thriftFormat   = "thrift"
 	protobufFormat = "protobuf"
@@ -133,24 +119,18 @@ const (
 func New(
 	instanceName string,
 	config *Configuration,
-	nextConsumer consumer.TraceConsumer,
+	nextConsumer consumer.TraceConsumerOld,
 	logger *zap.Logger,
-) (receiver.TraceReceiver, error) {
+) (component.TraceReceiver, error) {
 	return &jReceiver{
 		config: config,
 		defaultAgentCtx: obsreport.ReceiverContext(
 			context.Background(), instanceName, agentTransport, agentReceiverTagValue),
 		nextConsumer: nextConsumer,
 		instanceName: instanceName,
-		tchanServer: &jTchannelReceiver{
-			nextConsumer: nextConsumer,
-			instanceName: instanceName,
-		},
-		logger: logger,
+		logger:       logger,
 	}, nil
 }
-
-var _ receiver.TraceReceiver = (*jReceiver)(nil)
 
 func (jr *jReceiver) agentCompactThriftAddr() string {
 	var port int
@@ -212,20 +192,6 @@ func (jr *jReceiver) collectorHTTPEnabled() bool {
 	return jr.config != nil && jr.config.CollectorHTTPPort > 0
 }
 
-// TODO https://github.com/open-telemetry/opentelemetry-collector/issues/267
-//	Remove ThriftTChannel support.
-func (jr *jReceiver) collectorThriftAddr() string {
-	var port int
-	if jr.config != nil {
-		port = jr.config.CollectorThriftPort
-	}
-	return fmt.Sprintf(":%d", port)
-}
-
-func (jr *jReceiver) collectorThriftEnabled() bool {
-	return jr.config != nil && jr.config.CollectorThriftPort > 0
-}
-
 func (jr *jReceiver) Start(host component.Host) error {
 	jr.mu.Lock()
 	defer jr.mu.Unlock()
@@ -275,10 +241,6 @@ func (jr *jReceiver) stopTraceReceptionLocked() error {
 			}
 			jr.collectorServer = nil
 		}
-		if jr.tchanServer.tchannel != nil {
-			jr.tchanServer.tchannel.Close()
-			jr.tchanServer.tchannel = nil
-		}
 		if jr.grpc != nil {
 			jr.grpc.Stop()
 			jr.grpc = nil
@@ -301,7 +263,7 @@ func (jr *jReceiver) stopTraceReceptionLocked() error {
 func consumeTraceData(
 	ctx context.Context,
 	batches []*jaeger.Batch,
-	consumer consumer.TraceConsumer,
+	consumer consumer.TraceConsumerOld,
 ) ([]*jaeger.BatchSubmitResponse, int, error) {
 
 	jbsr := make([]*jaeger.BatchSubmitResponse, 0, len(batches))
@@ -329,26 +291,13 @@ func consumeTraceData(
 }
 
 func (jr *jReceiver) SubmitBatches(batches []*jaeger.Batch, options handler.SubmitBatchOptions) ([]*jaeger.BatchSubmitResponse, error) {
-	ctx := context.Background()
-	receiverCtx := obsreport.ReceiverContext(
-		ctx, jr.instanceName, collectorHTTPTransport, collectorReceiverTagValue)
-	_, span := obsreport.StartTraceDataReceiveOp(
-		receiverCtx, jr.instanceName, collectorHTTPTransport)
+	ctx := obsreport.ReceiverContext(
+		context.Background(), jr.instanceName, collectorHTTPTransport, collectorReceiverTagValue)
+	ctx = obsreport.StartTraceDataReceiveOp(
+		ctx, jr.instanceName, collectorHTTPTransport)
 
-	jbsr, numSpans, err := consumeTraceData(receiverCtx, batches, jr.nextConsumer)
-	obsreport.EndTraceDataReceiveOp(receiverCtx, span, thriftFormat, numSpans, err)
-
-	return jbsr, err
-}
-
-func (jtr *jTchannelReceiver) SubmitBatches(ctx thrift.Context, batches []*jaeger.Batch) ([]*jaeger.BatchSubmitResponse, error) {
-	receiverCtx := obsreport.ReceiverContext(
-		ctx, jtr.instanceName, collectorTChannelTransport, tchannelCollectorReceiverTagValue)
-	_, span := obsreport.StartTraceDataReceiveOp(
-		ctx, jtr.instanceName, collectorTChannelTransport)
-
-	jbsr, numSpans, err := consumeTraceData(receiverCtx, batches, jtr.nextConsumer)
-	obsreport.EndTraceDataReceiveOp(receiverCtx, span, thriftFormat, numSpans, err)
+	jbsr, numSpans, err := consumeTraceData(ctx, batches, jr.nextConsumer)
+	obsreport.EndTraceDataReceiveOp(ctx, thriftFormat, numSpans, err)
 
 	return jbsr, err
 }
@@ -366,14 +315,14 @@ func (jr *jReceiver) EmitZipkinBatch(spans []*zipkincore.Span) error {
 // EmitBatch implements cmd/agent/reporter.Reporter and it forwards
 // Jaeger spans received by the Jaeger agent processor.
 func (jr *jReceiver) EmitBatch(batch *jaeger.Batch) error {
-	_, span := obsreport.StartTraceDataReceiveOp(
-		context.Background(), jr.instanceName, agentTransport)
+	ctx := obsreport.StartTraceDataReceiveOp(
+		jr.defaultAgentCtx, jr.instanceName, agentTransport)
 	// TODO: call below never returns error it remove from the signature
 	td, _ := jaegertranslator.ThriftBatchToOCProto(batch)
 	td.SourceFormat = "jaeger"
 
-	err := jr.nextConsumer.ConsumeTraceData(jr.defaultAgentCtx, td)
-	obsreport.EndTraceDataReceiveOp(jr.defaultAgentCtx, span, thriftFormat, len(batch.Spans), err)
+	err := jr.nextConsumer.ConsumeTraceData(ctx, td)
+	obsreport.EndTraceDataReceiveOp(ctx, thriftFormat, len(batch.Spans), err)
 
 	return err
 }
@@ -398,17 +347,16 @@ func (jr *jReceiver) PostSpans(ctx context.Context, r *api_v2.PostSpansRequest) 
 		ctx = client.NewContext(ctx, c)
 	}
 
-	receiverCtx := obsreport.ReceiverContext(
+	ctx = obsreport.ReceiverContext(
 		ctx, jr.instanceName, grpcTransport, collectorReceiverTagValue)
-	_, span := obsreport.StartTraceDataReceiveOp(
-		ctx, jr.instanceName, grpcTransport)
+	ctx = obsreport.StartTraceDataReceiveOp(ctx, jr.instanceName, grpcTransport)
 
 	// TODO: the function below never returns error, change its interface.
 	td, _ := jaegertranslator.ProtoBatchToOCProto(r.GetBatch())
 	td.SourceFormat = "jaeger"
 
-	err := jr.nextConsumer.ConsumeTraceData(receiverCtx, td)
-	obsreport.EndTraceDataReceiveOp(receiverCtx, span, protobufFormat, len(r.GetBatch().Spans), err)
+	err := jr.nextConsumer.ConsumeTraceData(ctx, td)
+	obsreport.EndTraceDataReceiveOp(ctx, protobufFormat, len(r.GetBatch().Spans), err)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +414,7 @@ func (jr *jReceiver) startAgent(_ component.Host) error {
 }
 
 func (jr *jReceiver) buildProcessor(address string, factory apacheThrift.TProtocolFactory) (processors.Processor, error) {
-	handler := jaegerThrift.NewAgentProcessor(jr)
+	handler := jaeger.NewAgentProcessor(jr)
 	transport, err := thriftudp.NewTUDPServerTransport(address)
 	if err != nil {
 		return nil, err
@@ -483,26 +431,8 @@ func (jr *jReceiver) buildProcessor(address string, factory apacheThrift.TProtoc
 }
 
 func (jr *jReceiver) startCollector(host component.Host) error {
-	if !jr.collectorGRPCEnabled() && !jr.collectorHTTPEnabled() && !jr.collectorThriftEnabled() {
+	if !jr.collectorGRPCEnabled() && !jr.collectorHTTPEnabled() {
 		return nil
-	}
-
-	if jr.collectorThriftEnabled() {
-		tch, terr := tchannel.NewChannel("jaeger-collector", new(tchannel.ChannelOptions))
-		if terr != nil {
-			return fmt.Errorf("failed to create NewTChannel: %v", terr)
-		}
-
-		server := thrift.NewServer(tch)
-		server.Register(jaeger.NewTChanCollectorServer(jr.tchanServer))
-
-		taddr := jr.collectorThriftAddr()
-		tln, terr := net.Listen("tcp", taddr)
-		if terr != nil {
-			return fmt.Errorf("failed to bind to TChannel address %q: %v", taddr, terr)
-		}
-		tch.Serve(tln)
-		jr.tchanServer.tchannel = tch
 	}
 
 	if jr.collectorHTTPEnabled() {

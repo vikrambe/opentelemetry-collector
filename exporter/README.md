@@ -6,12 +6,13 @@ exporter translates the internal format into another defined format.
 Supported trace exporters (sorted alphabetically):
 
 - [Jaeger](#jaeger)
-- [OpenCensus](#opencensus)
+- [OpenCensus](#opencensus-traces)
+- [OTLP](#otlp)
 - [Zipkin](#zipkin)
 
 Supported metric exporters (sorted alphabetically):
 
-- [OpenCensus](#opencensus)
+- [OpenCensus](#opencensus-metrics)
 - [Prometheus](#prometheus)
 
 Supported local exporters (sorted alphabetically):
@@ -50,17 +51,7 @@ Any approach that does not mutate the original `TraceData`/`MetricsData` argumen
 # <a name="trace-exporters"></a>Trace Exporters
 
 ## <a name="jaeger"></a>Jaeger Exporter
-Exports trace data to [Jaeger](https://www.jaegertracing.io/) collectors
-accepting one of the following protocols:
-
-- [gRPC](#jaeger_grpc)
-- [Thrift HTTP](#jaeger_thirft_http)
-
-Each different supported protocol has its own configuration settings.
-
-### <a name="jaeger_grpc"></a>gRPC
-
-The following settings are required:
+Exports trace data to [Jaeger](https://www.jaegertracing.io/) collectors. The following settings are required:
 
 - `endpoint` (no default): target to which the exporter is going to send Jaeger trace data,
 using the gRPC protocol. The valid syntax is described at
@@ -81,41 +72,14 @@ Example:
 
 ```yaml
 exporters:
-  jaeger_grpc:
+  jaeger:
     endpoint: jaeger-all-in-one:14250
     cert_pem_file: /my-cert.pem
     server_name_override: opentelemetry.io
 ```
 
-The full list of settings exposed for this exporter are documented [here](jaeger/jaegergrpcpexporter/config.go)
-with detailed sample configurations [here](jaeger/jaegergrpcexporter/testdata/config.yaml).
-
-### <a name="jaeger_thrift_http"></a>Thrift HTTP
-
-The following settings are required:
-
-- `url` (no default): target to which the exporter is going to send Jaeger trace data,
-using the Thrift HTTP protocol.
-
-The following settings can be optionally configured:
-
-- `timeout` (default = 5s): the maximum time to wait for a HTTP request to complete
-- `headers` (no default): headers to be added to the HTTP request
-
-Example:
-
-```yaml
-exporters:
-  jaeger:
-    url: "http://some.other.location/api/traces"
-    timeout: 2s
-    headers:
-      added-entry: "added value"
-      dot.test: test
-```
-
-The full list of settings exposed for this exporter are documented [here](jaeger/jaegerthrifthttpexporter/config.go)
-with detailed sample configurations [here](jaeger/jaegerthrifthttpexporter/testdata/config.yaml).
+The full list of settings exposed for this exporter are documented [here](jaegerexporter/config.go)
+with detailed sample configurations [here](jaegerexporter/testdata/config.yaml).
 
 ## <a name="opencensus-traces"></a>OpenCensus Exporter
 Exports traces and/or metrics to another Collector via gRPC using OpenCensus format.
@@ -153,6 +117,43 @@ exporters:
 
 The full list of settings exposed for this exporter are documented [here](opencensusexporter/config.go)
 with detailed sample configurations [here](opencensusexporter/testdata/config.yaml).
+
+## <a name="otlp-traces"></a>OTLP Exporter
+Exports traces and/or metrics to another Collector via gRPC using OTLP format.
+
+The following settings are required:
+
+- `endpoint`: target to which the exporter is going to send traces or metrics,
+using the gRPC protocol. The valid syntax is described at
+https://github.com/grpc/grpc/blob/master/doc/naming.md.
+
+The following settings can be optionally configured:
+
+- `cert_pem_file`: certificate file for TLS credentials of gRPC client. Should
+only be used if `secure` is set to true.
+- `compression`: compression key for supported compression types within
+collector. Currently the only supported mode is `gzip`.
+- `headers`: the headers associated with gRPC requests.
+- `keepalive`: keepalive parameters for client gRPC. See
+[grpc.WithKeepaliveParams()](https://godoc.org/google.golang.org/grpc#WithKeepaliveParams).
+- `num_workers` (default = 2): number of workers that send the gRPC requests. Optional.
+- `reconnection_delay`: time period between each reconnection performed by the
+exporter.
+- `secure`: whether to enable client transport security for the exporter's gRPC
+connection. See [grpc.WithInsecure()](https://godoc.org/google.golang.org/grpc#WithInsecure).
+
+Example:
+
+```yaml
+exporters:
+  otlp:
+    endpoint: localhost:14250
+    reconnection_delay: 60s
+    secure: false
+```
+
+The full list of settings exposed for this exporter are documented [here](otlpexporter/config.go)
+with detailed sample configurations [here](otlpexporter/testdata/config.yaml).
 
 ## <a name="zipkin"></a>Zipkin Exporter
 Exports trace data to a [Zipkin](https://zipkin.io/) back-end.
@@ -239,17 +240,26 @@ The full list of settings exposed for this exporter are documented [here](fileex
 with detailed sample configurations [here](fileexporter/testdata/config.yaml).
 
 ## <a name="logging"></a>Logging Exporter
-Exports traces and/or metrics to the console via zap.Logger.
+Exports traces and/or metrics to the console via zap.Logger. This includes generic information
+about the package (with `info` loglevel) or details of the trace (when `debug` is set)
 
 The following settings can be configured:
 
-- `loglevel`: the log level of the logging export (debug|info|warn|error). Default is `info`.
+- `loglevel`: the log level of the logging export (debug|info|warn|error). Default is `info`. When it is set to `debug`, 
+the trace related data (e.g. node, attributes, spans, metadata) are verbosely logged.
+- `sampling_initial`: number of messages initially logged each second. Default is 2. 
+- `sampling_thereafter`: sampling rate after the initial messages are logged (every Mth message 
+is logged). Default is 500.  Refer to [Zap docs](https://godoc.org/go.uber.org/zap/zapcore#NewSampler) for 
+more details on how sampling parameters impact number of messages.
 
 Example:
 
 ```yaml
 exporters:
   logging:
+    loglevel: info
+    sampling_initial: 5
+    sampling_thereafter: 200
 ```
 
 The full list of settings exposed for this exporter are documented [here](loggingexporter/config.go)

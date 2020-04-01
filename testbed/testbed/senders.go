@@ -17,15 +17,15 @@ package testbed
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configgrpc"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/exporter"
-	"github.com/open-telemetry/opentelemetry-collector/exporter/jaeger/jaegerthrifthttpexporter"
+	"github.com/open-telemetry/opentelemetry-collector/exporter/jaegerexporter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/opencensusexporter"
+	"github.com/open-telemetry/opentelemetry-collector/exporter/otlpexporter"
 )
 
 // DataSender defines the interface that allows sending data. This is an interface
@@ -67,7 +67,7 @@ type MetricDataSender interface {
 
 // DataSenderOverTraceExporter partially implements TraceDataSender via a TraceExporter.
 type DataSenderOverTraceExporter struct {
-	exporter exporter.TraceExporter
+	exporter component.TraceExporterOld
 	Port     int
 }
 
@@ -89,29 +89,30 @@ func (ds *DataSenderOverTraceExporter) GetCollectorPort() int {
 	return ds.Port
 }
 
-// JaegerThriftDataSender implements TraceDataSender for Jaeger thrift_http protocol.
-type JaegerThriftDataSender struct {
+// JaegerGRPCDataSender implements TraceDataSender for Jaeger thrift_http protocol.
+type JaegerGRPCDataSender struct {
 	DataSenderOverTraceExporter
 }
 
-// Ensure JaegerThriftDataSender implements TraceDataSender.
-var _ TraceDataSender = (*JaegerThriftDataSender)(nil)
+// Ensure JaegerGRPCDataSender implements TraceDataSender.
+var _ TraceDataSender = (*JaegerGRPCDataSender)(nil)
 
-// NewJaegerThriftDataSender creates a new Jaeger protocol sender that will send
+// NewJaegerGRPCDataSender creates a new Jaeger protocol sender that will send
 // to the specified port after Start is called.
-func NewJaegerThriftDataSender(port int) *JaegerThriftDataSender {
-	return &JaegerThriftDataSender{DataSenderOverTraceExporter{Port: port}}
+func NewJaegerGRPCDataSender(port int) *JaegerGRPCDataSender {
+	return &JaegerGRPCDataSender{DataSenderOverTraceExporter{Port: port}}
 }
 
-func (je *JaegerThriftDataSender) Start() error {
-	cfg := &jaegerthrifthttpexporter.Config{
-		// Use standard URL for Jaeger.
-		URL:     fmt.Sprintf("http://localhost:%d/api/traces", je.Port),
-		Timeout: 5 * time.Second,
+func (je *JaegerGRPCDataSender) Start() error {
+	cfg := &jaegerexporter.Config{
+		// Use standard endpoint for Jaeger.
+		GRPCSettings: configgrpc.GRPCSettings{
+			Endpoint: fmt.Sprintf("localhost:%d", je.Port),
+		},
 	}
 
 	var err error
-	factory := jaegerthrifthttpexporter.Factory{}
+	factory := jaegerexporter.Factory{}
 	exporter, err := factory.CreateTraceExporter(zap.L(), cfg)
 
 	if err != nil {
@@ -122,12 +123,12 @@ func (je *JaegerThriftDataSender) Start() error {
 	return err
 }
 
-func (je *JaegerThriftDataSender) GenConfigYAMLStr() string {
+func (je *JaegerGRPCDataSender) GenConfigYAMLStr() string {
 	// Note that this generates a receiver config for agent.
-	// We only need to enable thrift_http protocol because that's what we use in tests.
+	// We only need to enable gRPC protocol because that's what we use in tests.
 	// Due to bug in Jaeger receiver (https://github.com/open-telemetry/opentelemetry-collector/issues/445)
 	// which makes it impossible to disable protocols that we don't need to receive on we
-	// have to use fake ports for all endpoints except thrift_http, otherwise it is
+	// have to use fake ports for all endpoints except gRPC, otherwise it is
 	// impossible to start the Collector because the standard ports for those protocols
 	// are already listened by mock Jaeger backend that is part of the tests.
 	// As soon as the bug is fixed remove the endpoints and use "disabled: true" setting
@@ -136,7 +137,7 @@ func (je *JaegerThriftDataSender) GenConfigYAMLStr() string {
   jaeger:
     protocols:
       grpc:
-        endpoint: "localhost:8371"
+        endpoint: "localhost:%d"
       thrift_tchannel:
         endpoint: "localhost:8372"
       thrift_compact:
@@ -144,10 +145,10 @@ func (je *JaegerThriftDataSender) GenConfigYAMLStr() string {
       thrift_binary:
         endpoint: "localhost:8374"
       thrift_http:
-        endpoint: "localhost:%d"`, je.Port)
+        endpoint: "localhost:8375"`, je.Port)
 }
 
-func (je *JaegerThriftDataSender) ProtocolName() string {
+func (je *JaegerGRPCDataSender) ProtocolName() string {
 	return "jaeger"
 }
 
@@ -196,7 +197,7 @@ func (ote *OCTraceDataSender) ProtocolName() string {
 
 // OCMetricsDataSender implements MetricDataSender for OpenCensus metrics protocol.
 type OCMetricsDataSender struct {
-	exporter exporter.MetricsExporter
+	exporter component.MetricsExporterOld
 	port     int
 }
 
@@ -247,4 +248,102 @@ func (ome *OCMetricsDataSender) GetCollectorPort() int {
 
 func (ome *OCMetricsDataSender) ProtocolName() string {
 	return "opencensus"
+}
+
+// OTLPTraceDataSender implements TraceDataSender for OpenCensus trace protocol.
+type OTLPTraceDataSender struct {
+	DataSenderOverTraceExporter
+}
+
+// Ensure OTLPTraceDataSender implements TraceDataSender.
+var _ TraceDataSender = (*OTLPTraceDataSender)(nil)
+
+// NewOTLPTraceDataSender creates a new OTLPTraceDataSender that will send
+// to the specified port after Start is called.
+func NewOTLPTraceDataSender(port int) *OTLPTraceDataSender {
+	return &OTLPTraceDataSender{DataSenderOverTraceExporter{Port: port}}
+}
+
+func (ote *OTLPTraceDataSender) Start() error {
+	cfg := &otlpexporter.Config{
+		GRPCSettings: configgrpc.GRPCSettings{
+			Endpoint: fmt.Sprintf("localhost:%d", ote.Port),
+		},
+	}
+
+	factory := otlpexporter.Factory{}
+	exporter, err := factory.CreateTraceExporter(zap.L(), cfg)
+
+	if err != nil {
+		return err
+	}
+
+	ote.exporter = exporter
+	return err
+}
+
+func (ote *OTLPTraceDataSender) GenConfigYAMLStr() string {
+	// Note that this generates a receiver config for agent.
+	return fmt.Sprintf(`
+  otlp:
+    endpoint: "localhost:%d"`, ote.Port)
+}
+
+func (ote *OTLPTraceDataSender) ProtocolName() string {
+	return "otlp"
+}
+
+// OTLPMetricsDataSender implements MetricDataSender for OpenCensus metrics protocol.
+type OTLPMetricsDataSender struct {
+	exporter component.MetricsExporterOld
+	port     int
+}
+
+// Ensure OTLPMetricsDataSender implements MetricDataSender.
+var _ MetricDataSender = (*OTLPMetricsDataSender)(nil)
+
+// NewOTLPMetricDataSender creates a new OpenCensus metric protocol sender that will send
+// to the specified port after Start is called.
+func NewOTLPMetricDataSender(port int) *OTLPMetricsDataSender {
+	return &OTLPMetricsDataSender{port: port}
+}
+
+func (ome *OTLPMetricsDataSender) Start() error {
+	cfg := &otlpexporter.Config{
+		GRPCSettings: configgrpc.GRPCSettings{
+			Endpoint: fmt.Sprintf("localhost:%d", ome.port),
+		},
+	}
+
+	factory := otlpexporter.Factory{}
+	exporter, err := factory.CreateMetricsExporter(zap.L(), cfg)
+
+	if err != nil {
+		return err
+	}
+
+	ome.exporter = exporter
+	return nil
+}
+
+func (ome *OTLPMetricsDataSender) SendMetrics(metrics consumerdata.MetricsData) error {
+	return ome.exporter.ConsumeMetricsData(context.Background(), metrics)
+}
+
+func (ome *OTLPMetricsDataSender) Flush() {
+}
+
+func (ome *OTLPMetricsDataSender) GenConfigYAMLStr() string {
+	// Note that this generates a receiver config for agent.
+	return fmt.Sprintf(`
+  otlp:
+    endpoint: "localhost:%d"`, ome.port)
+}
+
+func (ome *OTLPMetricsDataSender) GetCollectorPort() int {
+	return ome.port
+}
+
+func (ome *OTLPMetricsDataSender) ProtocolName() string {
+	return "otlp"
 }

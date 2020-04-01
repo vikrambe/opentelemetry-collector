@@ -15,92 +15,72 @@
 package data
 
 import (
-	"math/rand"
 	"testing"
 
+	otlptrace "github.com/open-telemetry/opentelemetry-proto/gen/go/trace/v1"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSpanCount(t *testing.T) {
-	td := TraceData{}
-	assert.EqualValues(t, 0, td.SpanCount())
+	md := NewTraceData()
+	assert.EqualValues(t, 0, md.SpanCount())
 
-	td = TraceData{
-		resourceSpans: []*ResourceSpans{
-			NewResourceSpans(nil, []*Span{}),
-		},
-	}
-	assert.EqualValues(t, 0, td.SpanCount())
+	md.SetResourceSpans(NewResourceSpansSlice(1))
+	assert.EqualValues(t, 0, md.SpanCount())
 
-	td = TraceData{
-		resourceSpans: []*ResourceSpans{
-			NewResourceSpans(nil, []*Span{nil}),
-		},
-	}
-	assert.EqualValues(t, 1, td.SpanCount())
+	md.ResourceSpans().Get(0).SetInstrumentationLibrarySpans(NewInstrumentationLibrarySpansSlice(1))
+	assert.EqualValues(t, 0, md.SpanCount())
 
-	td = TraceData{
-		resourceSpans: []*ResourceSpans{
-			NewResourceSpans(nil, []*Span{nil}),
-			NewResourceSpans(nil, []*Span{}),
-			NewResourceSpans(nil, []*Span{nil, nil, nil, nil, nil}),
-		},
-	}
-	assert.EqualValues(t, 6, td.SpanCount())
+	md.ResourceSpans().Get(0).InstrumentationLibrarySpans().Get(0).SetSpans(NewSpanSlice(1))
+	assert.EqualValues(t, 1, md.SpanCount())
+
+	rms := NewResourceSpansSlice(3)
+	rms.Get(0).SetInstrumentationLibrarySpans(NewInstrumentationLibrarySpansSlice(1))
+	rms.Get(0).InstrumentationLibrarySpans().Get(0).SetSpans(NewSpanSlice(1))
+	rms.Get(1).SetInstrumentationLibrarySpans(NewInstrumentationLibrarySpansSlice(1))
+	rms.Get(2).SetInstrumentationLibrarySpans(NewInstrumentationLibrarySpansSlice(1))
+	rms.Get(2).InstrumentationLibrarySpans().Get(0).SetSpans(NewSpanSlice(5))
+	md.SetResourceSpans(rms)
+	assert.EqualValues(t, 6, md.SpanCount())
 }
 
-func TestNewSpanSlice(t *testing.T) {
-	spans := NewSpanSlice(0)
-	assert.EqualValues(t, 0, len(spans))
+func TestTraceID(t *testing.T) {
+	tid := NewTraceID(nil)
+	assert.EqualValues(t, []byte(nil), tid.Bytes())
 
-	n := rand.Intn(10)
-	spans = NewSpanSlice(n)
-	assert.EqualValues(t, n, len(spans))
-	for span := range spans {
-		assert.NotNil(t, span)
-	}
-}
-
-func TestNewSpanEventSlice(t *testing.T) {
-	events := NewSpanEventSlice(0)
-	assert.EqualValues(t, 0, len(events))
-
-	n := rand.Intn(10)
-	events = NewSpanEventSlice(n)
-	assert.EqualValues(t, n, len(events))
-	for event := range events {
-		assert.NotNil(t, event)
-	}
-}
-
-func TestNewSpanLinkSlice(t *testing.T) {
-	links := NewSpanLinkSlice(0)
-	assert.EqualValues(t, 0, len(links))
-
-	n := rand.Intn(10)
-	links = NewSpanLinkSlice(n)
-	assert.EqualValues(t, n, len(links))
-	for link := range links {
-		assert.NotNil(t, link)
-	}
+	tid = NewTraceID([]byte{1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1})
+	assert.EqualValues(t, []byte{1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1}, tid.Bytes())
 }
 
 func TestAttrs(t *testing.T) {
-	attrs := AttributesMap{"attr1": NewAttributeValueString("abc")}
+	attrs := NewAttributeMap(AttributesMap{"attr1": NewAttributeValueString("abc")})
 
-	span := NewSpan()
+	span := NewEmptySpan()
 	assert.EqualValues(t, 0, span.DroppedAttributesCount())
-	span.SetAttributes(NewAttributes(attrs, 123))
-	assert.EqualValues(t, 123, span.DroppedAttributesCount())
+	span.SetAttributes(attrs)
 	assert.EqualValues(t, attrs, span.Attributes())
+	span.SetDroppedAttributesCount(123)
+	assert.EqualValues(t, 123, span.DroppedAttributesCount())
 
-	event := NewSpanEvent(0, "", NewAttributes(attrs, 234))
-	assert.EqualValues(t, 234, event.DroppedAttributesCount())
+	event := NewEmptySpanEvent()
+	event.SetAttributes(attrs)
 	assert.EqualValues(t, attrs, event.Attributes())
+	event.SetDroppedAttributesCount(234)
+	assert.EqualValues(t, 234, event.DroppedAttributesCount())
 
-	link := NewSpanLink()
+	link := NewEmptySpanLink()
 	assert.EqualValues(t, 0, link.DroppedAttributesCount())
-	link.SetAttributes(NewAttributes(attrs, 456))
-	assert.EqualValues(t, 456, link.DroppedAttributesCount())
+	link.SetAttributes(attrs)
 	assert.EqualValues(t, attrs, link.Attributes())
+	link.SetDroppedAttributesCount(456)
+	assert.EqualValues(t, 456, link.DroppedAttributesCount())
+}
+
+func TestToFromOtlp(t *testing.T) {
+	otlp := []*otlptrace.ResourceSpans(nil)
+	td := TraceDataFromOtlp(otlp)
+	assert.EqualValues(t, NewTraceData(), td)
+	assert.EqualValues(t, otlp, TraceDataToOtlp(td))
+	// More tests in ./tracedata/trace_test.go. Cannot have them here because of
+	// circular dependency.
 }

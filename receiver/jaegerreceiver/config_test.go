@@ -57,11 +57,6 @@ func TestLoadConfig(t *testing.T) {
 						Endpoint: ":3456",
 					},
 				},
-				"thrift_tchannel": {
-					ReceiverSettings: configmodels.ReceiverSettings{
-						Endpoint: "0.0.0.0:123",
-					},
-				},
 				"thrift_compact": {
 					ReceiverSettings: configmodels.ReceiverSettings{
 						Endpoint: "0.0.0.0:456",
@@ -94,11 +89,6 @@ func TestLoadConfig(t *testing.T) {
 				"thrift_http": {
 					ReceiverSettings: configmodels.ReceiverSettings{
 						Endpoint: defaultHTTPBindEndpoint,
-					},
-				},
-				"thrift_tchannel": {
-					ReceiverSettings: configmodels.ReceiverSettings{
-						Endpoint: defaultTChannelBindEndpoint,
 					},
 				},
 				"thrift_compact": {
@@ -154,11 +144,6 @@ func TestLoadConfig(t *testing.T) {
 						Endpoint: ":3456",
 					},
 				},
-				"thrift_tchannel": {
-					ReceiverSettings: configmodels.ReceiverSettings{
-						Endpoint: "0.0.0.0:123",
-					},
-				},
 			},
 		})
 }
@@ -176,5 +161,5 @@ func TestFailedLoadConfig(t *testing.T) {
 	assert.EqualError(t, err, `error reading settings for receiver type "jaeger": must specify at least one protocol when using the Jaeger receiver`)
 
 	_, err = config.LoadConfigFile(t, path.Join(".", "testdata", "bad_empty_config.yaml"), factories)
-	assert.EqualError(t, err, `error reading settings for receiver type "jaeger": Jaeger receiver config is empty`)
+	assert.EqualError(t, err, `error reading settings for receiver type "jaeger": empty config for Jaeger receiver`)
 }

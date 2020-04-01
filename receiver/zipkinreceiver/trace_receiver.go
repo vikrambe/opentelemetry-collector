@@ -43,7 +43,6 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/internal"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
 	"github.com/open-telemetry/opentelemetry-collector/oterr"
-	"github.com/open-telemetry/opentelemetry-collector/receiver"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
 	"github.com/open-telemetry/opentelemetry-collector/translator/trace/zipkin"
 )
@@ -62,7 +61,7 @@ type ZipkinReceiver struct {
 	// addr is the address onto which the HTTP server will be bound
 	addr         string
 	host         component.Host
-	nextConsumer consumer.TraceConsumer
+	nextConsumer consumer.TraceConsumerOld
 	instanceName string
 
 	startOnce sync.Once
@@ -70,11 +69,10 @@ type ZipkinReceiver struct {
 	server    *http.Server
 }
 
-var _ receiver.TraceReceiver = (*ZipkinReceiver)(nil)
 var _ http.Handler = (*ZipkinReceiver)(nil)
 
 // New creates a new zipkinreceiver.ZipkinReceiver reference.
-func New(instanceName, address string, nextConsumer consumer.TraceConsumer) (*ZipkinReceiver, error) {
+func New(instanceName, address string, nextConsumer consumer.TraceConsumerOld) (*ZipkinReceiver, error) {
 	if nextConsumer == nil {
 		return nil, oterr.ErrNilNextConsumer
 	}
@@ -297,9 +295,9 @@ const (
 // The ZipkinReceiver receives spans from endpoint /api/v2 as JSON,
 // unmarshals them and sends them along to the nextConsumer.
 func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	parentCtx := r.Context()
+	ctx := r.Context()
 	if c, ok := client.FromHTTP(r); ok {
-		parentCtx = client.NewContext(parentCtx, c)
+		ctx = client.NewContext(ctx, c)
 	}
 
 	// Now deserialize and process the spans.
@@ -312,10 +310,9 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		receiverTagValue = zipkinV2TagValue
 	}
 
-	receiverCtx := obsreport.ReceiverContext(
-		parentCtx, zr.instanceName, receiverTransport, receiverTagValue)
-	_, span := obsreport.StartTraceDataReceiveOp(
-		parentCtx, zr.instanceName, receiverTransport)
+	ctx = obsreport.ReceiverContext(
+		ctx, zr.instanceName, receiverTransport, receiverTagValue)
+	ctx = obsreport.StartTraceDataReceiveOp(ctx, zr.instanceName, receiverTransport)
 
 	pr := processBodyIfNecessary(r)
 	slurp, _ := ioutil.ReadAll(pr)
@@ -333,7 +330,7 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		span.SetStatus(trace.Status{
+		trace.FromContext(ctx).SetStatus(trace.Status{
 			Code:    trace.StatusCodeInvalidArgument,
 			Message: err.Error(),
 		})
@@ -351,10 +348,10 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		td.SourceFormat = "zipkin"
-		consumerErr = zr.nextConsumer.ConsumeTraceData(receiverCtx, td)
+		consumerErr = zr.nextConsumer.ConsumeTraceData(ctx, td)
 	}
 
-	obsreport.EndTraceDataReceiveOp(receiverCtx, span, receiverTagValue, tdsSize, consumerErr)
+	obsreport.EndTraceDataReceiveOp(ctx, receiverTagValue, tdsSize, consumerErr)
 
 	if consumerErr != nil {
 		// Transient error, due to some internal condition.

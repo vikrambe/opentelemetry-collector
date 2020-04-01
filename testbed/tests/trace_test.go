@@ -48,11 +48,11 @@ func TestTrace10kSPS(t *testing.T) {
 		resourceSpec testbed.ResourceSpec
 	}{
 		{
-			"JaegerThrift",
-			testbed.NewJaegerThriftDataSender(testbed.GetAvailablePort(t)),
+			"JaegerGRPC",
+			testbed.NewJaegerGRPCDataSender(testbed.GetAvailablePort(t)),
 			testbed.NewJaegerDataReceiver(testbed.GetAvailablePort(t)),
 			testbed.ResourceSpec{
-				ExpectedMaxCPU: 52,
+				ExpectedMaxCPU: 53,
 				ExpectedMaxRAM: 89,
 			},
 		},
@@ -62,6 +62,15 @@ func TestTrace10kSPS(t *testing.T) {
 			testbed.NewOCDataReceiver(testbed.GetAvailablePort(t)),
 			testbed.ResourceSpec{
 				ExpectedMaxCPU: 42,
+				ExpectedMaxRAM: 84,
+			},
+		},
+		{
+			"OTLP",
+			testbed.NewOTLPTraceDataSender(testbed.GetAvailablePort(t)),
+			testbed.NewOTLPDataReceiver(testbed.GetAvailablePort(t)),
+			testbed.ResourceSpec{
+				ExpectedMaxCPU: 60,
 				ExpectedMaxRAM: 84,
 			},
 		},
@@ -104,7 +113,7 @@ func TestTraceNoBackend10kSPSJaeger(t *testing.T) {
 
 			tc := testbed.NewTestCase(
 				t,
-				testbed.NewJaegerThriftDataSender(testbed.DefaultJaegerPort),
+				testbed.NewJaegerGRPCDataSender(testbed.DefaultJaegerPort),
 				testbed.NewOCDataReceiver(testbed.DefaultOCPort),
 				testbed.WithConfigFile(configFilePath),
 			)
@@ -281,9 +290,14 @@ func TestTraceAttributesProcessor(t *testing.T) {
 		receiver testbed.DataReceiver
 	}{
 		{
-			"JaegerThrift",
-			testbed.NewJaegerThriftDataSender(testbed.GetAvailablePort(t)),
+			"JaegerGRPC",
+			testbed.NewJaegerGRPCDataSender(testbed.GetAvailablePort(t)),
 			testbed.NewJaegerDataReceiver(testbed.GetAvailablePort(t)),
+		},
+		{
+			"OTLP",
+			testbed.NewOTLPTraceDataSender(testbed.GetAvailablePort(t)),
+			testbed.NewOTLPDataReceiver(testbed.GetAvailablePort(t)),
 		},
 	}
 
@@ -309,7 +323,7 @@ func TestTraceAttributesProcessor(t *testing.T) {
 `,
 			}
 
-			configFile := createConfigFile(test.sender, test.receiver, resultDir, processors)
+			configFile := createConfigFile(t, test.sender, test.receiver, resultDir, processors)
 			defer os.Remove(configFile)
 
 			if configFile == "" {

@@ -16,11 +16,14 @@ package service
 
 import (
 	"flag"
-	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"contrib.go.opencensus.io/exporter/prometheus"
+	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"go.opencensus.io/stats/view"
 	"go.uber.org/zap"
 
@@ -30,6 +33,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/processor/batchprocessor"
 	"github.com/open-telemetry/opentelemetry-collector/processor/queuedprocessor"
 	"github.com/open-telemetry/opentelemetry-collector/processor/samplingprocessor/tailsamplingprocessor"
+	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
 )
 
 const (
@@ -49,6 +53,7 @@ var (
 
 	useLegacyMetricsPtr *bool
 	useNewMetricsPtr    *bool
+	addInstanceIDPtr    *bool
 )
 
 type appTelemetry struct {
@@ -84,12 +89,17 @@ func telemetryFlags(flags *flag.FlagSet) {
 		false,
 		"Flag to control usage of new metrics",
 	)
+
+	addInstanceIDPtr = flags.Bool(
+		"add-instance-id",
+		false,
+		"Flag to control the addition of 'service.instance.id' to the collector metrics.")
 }
 
 func (tel *appTelemetry) init(asyncErrorChannel chan<- error, ballastSizeBytes uint64, logger *zap.Logger) error {
 	level, err := telemetry.ParseLevel(*metricsLevelPtr)
 	if err != nil {
-		log.Fatalf("Failed to parse metrics level: %v", err)
+		return errors.Wrap(err, "failed to parse metrics level")
 	}
 
 	if level == telemetry.None {
@@ -98,15 +108,16 @@ func (tel *appTelemetry) init(asyncErrorChannel chan<- error, ballastSizeBytes u
 
 	port := int(*metricsPortPtr)
 
-	views := processor.MetricViews(level)
+	var views []*view.View
 	views = append(views, obsreport.Configure(*useLegacyMetricsPtr, *useNewMetricsPtr)...)
+	views = append(views, processor.MetricViews(level)...)
 	views = append(views, queuedprocessor.MetricViews(level)...)
 	views = append(views, batchprocessor.MetricViews(level)...)
 	views = append(views, tailsamplingprocessor.SamplingProcessorMetricViews(level)...)
 	processMetricsViews := telemetry.NewProcessMetricsViews(ballastSizeBytes)
 	views = append(views, processMetricsViews.Views()...)
 	tel.views = views
-	if err := view.Register(views...); err != nil {
+	if err = view.Register(views...); err != nil {
 		return err
 	}
 
@@ -116,6 +127,16 @@ func (tel *appTelemetry) init(asyncErrorChannel chan<- error, ballastSizeBytes u
 	opts := prometheus.Options{
 		Namespace: *metricsPrefixPtr,
 	}
+
+	var instanceID string
+	if *addInstanceIDPtr {
+		instanceUUID, _ := uuid.NewRandom()
+		instanceID = instanceUUID.String()
+		opts.ConstLabels = map[string]string{
+			sanitizePrometheusKey(conventions.AttributeServiceInstance): instanceID,
+		}
+	}
+
 	pe, err := prometheus.NewExporter(opts)
 	if err != nil {
 		return err
@@ -129,6 +150,7 @@ func (tel *appTelemetry) init(asyncErrorChannel chan<- error, ballastSizeBytes u
 		zap.Bool("legacy_metrics", *useLegacyMetricsPtr),
 		zap.Bool("new_metrics", *useNewMetricsPtr),
 		zap.Int8("level", int8(level)), // TODO: make it human friendly
+		zap.String(conventions.AttributeServiceInstance, instanceID),
 	)
 
 	go func() {
@@ -145,4 +167,14 @@ func (tel *appTelemetry) init(asyncErrorChannel chan<- error, ballastSizeBytes u
 
 func (tel *appTelemetry) shutdown() {
 	view.Unregister(tel.views...)
+}
+
+func sanitizePrometheusKey(str string) string {
+	runeFilterMap := func(r rune) rune {
+		if unicode.IsDigit(r) || unicode.IsLetter(r) || r == '_' {
+			return r
+		}
+		return '_'
+	}
+	return strings.Map(runeFilterMap, str)
 }

@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector/config"
 	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
 	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
@@ -100,18 +100,6 @@ func TestCreateInvalidHTTPEndpoint(t *testing.T) {
 	assert.Equal(t, 14268, r.(*jReceiver).config.CollectorHTTPPort, "http port should be default")
 }
 
-func TestCreateInvalidTChannelEndpoint(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig()
-	rCfg := cfg.(*Config)
-
-	rCfg.Protocols[protoThriftTChannel], _ = defaultsForProtocol(protoThriftTChannel)
-	r, err := factory.CreateTraceReceiver(context.Background(), zap.NewNop(), cfg, nil)
-
-	assert.NoError(t, err, "unexpected error creating receiver")
-	assert.Equal(t, 14267, r.(*jReceiver).config.CollectorThriftPort, "thrift port should be default")
-}
-
 func TestCreateInvalidThriftBinaryEndpoint(t *testing.T) {
 	factory := Factory{}
 	cfg := factory.CreateDefaultConfig()
@@ -172,7 +160,7 @@ func TestCreateLargePort(t *testing.T) {
 	cfg := factory.CreateDefaultConfig()
 	rCfg := cfg.(*Config)
 
-	rCfg.Protocols[protoThriftTChannel] = &receiver.SecureReceiverSettings{
+	rCfg.Protocols[protoThriftHTTP] = &receiver.SecureReceiverSettings{
 		ReceiverSettings: configmodels.ReceiverSettings{
 			Endpoint: "localhost:65536",
 		},
@@ -275,15 +263,15 @@ func TestRemoteSamplingFileRequiresGRPC(t *testing.T) {
 
 func TestCustomUnmarshalErrors(t *testing.T) {
 	factory := Factory{}
-	v := viper.New()
+	v := config.NewViper()
 
 	f := factory.CustomUnmarshaler()
 	assert.NotNil(t, f, "custom unmarshal function should not be nil")
 
-	err := f(v, "", viper.New(), nil)
+	err := f(v, "", config.NewViper(), nil)
 	assert.Error(t, err, "should not have been able to marshal to a nil config")
 
-	err = f(v, "", viper.New(), &RemoteSamplingConfig{})
+	err = f(v, "", config.NewViper(), &RemoteSamplingConfig{})
 	assert.Error(t, err, "should not have been able to marshal to a non-jaegerreceiver config")
 }
 
