@@ -6,8 +6,8 @@ receivers:
 
 exporters:
   splunk:
-    http_event_controller: "https://hec-clb-us-west-2.ppd.cmn.oel.a.intuit.com/services/collector"
-    token: "05D9BB57-547B-4583-9227-9EDF5CA53856"
+    http_event_controller: ""
+    token: ""
     splunk_index: "zipkin_ppd"
     source: "test"
     source_type: "httpevent"
