@@ -23,7 +23,7 @@ import (
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/timestamp"
-	wrappers "github.com/golang/protobuf/ptypes/wrappers"
+	"github.com/golang/protobuf/ptypes/wrappers"
 	jaeger "github.com/jaegertracing/jaeger/model"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
@@ -411,6 +411,14 @@ func appendJaegerTagFromOCStatusProto(jTags []jaeger.KeyValue, ocStatus *tracepb
 		VInt64: int64(ocStatus.Code),
 		VType:  jaeger.ValueType_INT64,
 	})
+
+	if ocStatus.Code != 0 {
+		jTags = append(jTags, jaeger.KeyValue{
+			Key:   tracetranslator.TagError,
+			VBool: ocStatus.Code != 0,
+			VType: jaeger.ValueType_BOOL,
+		})
+	}
 
 	if ocStatus.Message != "" {
 		jTags = append(jTags, jaeger.KeyValue{

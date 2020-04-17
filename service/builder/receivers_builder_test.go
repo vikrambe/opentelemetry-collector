@@ -19,12 +19,12 @@ import (
 	"testing"
 
 	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
-	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/config"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
@@ -135,17 +135,9 @@ func testReceivers(
 		require.Equal(t, len(consumer.Metrics), 0)
 	}
 
-	// Send one trace.
-	name := tracepb.TruncatableString{Value: "testspanname"}
-	traceData := consumerdata.TraceData{
-		SourceFormat: "test-source-format",
-		Spans: []*tracepb.Span{
-			{Name: &name},
-		},
-	}
 	if test.hasTraces {
 		traceProducer := receiver.receiver.(*config.ExampleReceiverProducer)
-		traceProducer.TraceConsumer.ConsumeTraceData(context.Background(), traceData)
+		traceProducer.TraceConsumer.ConsumeTraceData(context.Background(), generateTestTraceData())
 	}
 
 	metricsData := consumerdata.MetricsData{
@@ -176,12 +168,7 @@ func testReceivers(
 			require.Equal(t, spanDuplicationCount, len(traceConsumer.Traces))
 
 			for i := 0; i < spanDuplicationCount; i++ {
-				assertEqualTraceData(t, traceData, traceConsumer.Traces[i])
-
-				// Check that the span was processed by "attributes" processor and an
-				// attribute was added.
-				assert.Equal(t, int64(12345),
-					traceConsumer.Traces[i].Spans[0].Attributes.AttributeMap["attr1"].GetIntValue())
+				assertEqualTraceData(t, generateTestTraceDataWithAttributes(), traceConsumer.Traces[i])
 			}
 		}
 
@@ -227,13 +214,13 @@ func TestReceiversBuilder_StartAll(t *testing.T) {
 	receiver := &config.ExampleReceiverProducer{}
 
 	receivers[rcvCfg] = &builtReceiver{
+		logger:   zap.NewNop(),
 		receiver: receiver,
 	}
 
 	assert.Equal(t, false, receiver.Started)
 
-	mh := component.NewMockHost()
-	err := receivers.StartAll(zap.NewNop(), mh)
+	err := receivers.StartAll(context.Background(), componenttest.NewNopHost())
 	assert.Nil(t, err)
 
 	assert.Equal(t, true, receiver.Started)
@@ -246,12 +233,13 @@ func TestReceiversBuilder_StopAll(t *testing.T) {
 	receiver := &config.ExampleReceiverProducer{}
 
 	receivers[rcvCfg] = &builtReceiver{
+		logger:   zap.NewNop(),
 		receiver: receiver,
 	}
 
 	assert.Equal(t, false, receiver.Stopped)
 
-	receivers.StopAll()
+	assert.NoError(t, receivers.ShutdownAll(context.Background()))
 
 	assert.Equal(t, true, receiver.Stopped)
 }
@@ -315,9 +303,8 @@ func TestReceiversBuilder_Unused(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, receivers)
 
-	mh := component.NewMockHost()
-	receivers.StartAll(zap.NewNop(), mh)
-	receivers.StopAll()
+	assert.NoError(t, receivers.StartAll(context.Background(), componenttest.NewNopHost()))
+	assert.NoError(t, receivers.ShutdownAll(context.Background()))
 }
 
 func TestReceiversBuilder_InternalToOcTraceConverter(t *testing.T) {
@@ -362,18 +349,18 @@ func (b *badReceiverFactory) CustomUnmarshaler() component.CustomUnmarshaler {
 }
 
 func (b *badReceiverFactory) CreateTraceReceiver(
-	ctx context.Context,
-	logger *zap.Logger,
-	cfg configmodels.Receiver,
-	nextConsumer consumer.TraceConsumerOld,
+	_ context.Context,
+	_ *zap.Logger,
+	_ configmodels.Receiver,
+	_ consumer.TraceConsumerOld,
 ) (component.TraceReceiver, error) {
 	return nil, nil
 }
 
 func (b *badReceiverFactory) CreateMetricsReceiver(
-	logger *zap.Logger,
-	cfg configmodels.Receiver,
-	consumer consumer.MetricsConsumerOld,
+	_ *zap.Logger,
+	_ configmodels.Receiver,
+	_ consumer.MetricsConsumerOld,
 ) (component.MetricsReceiver, error) {
 	return nil, nil
 }
@@ -394,19 +381,19 @@ func (b *newStyleReceiverFactory) CustomUnmarshaler() component.CustomUnmarshale
 }
 
 func (b *newStyleReceiverFactory) CreateTraceReceiver(
-	ctx context.Context,
-	params component.ReceiverCreateParams,
-	cfg configmodels.Receiver,
-	nextConsumer consumer.TraceConsumer,
+	_ context.Context,
+	_ component.ReceiverCreateParams,
+	_ configmodels.Receiver,
+	_ consumer.TraceConsumer,
 ) (component.TraceReceiver, error) {
 	return &config.ExampleReceiverProducer{}, nil
 }
 
 func (b *newStyleReceiverFactory) CreateMetricsReceiver(
-	ctx context.Context,
-	params component.ReceiverCreateParams,
-	cfg configmodels.Receiver,
-	consumer consumer.MetricsConsumer,
+	_ context.Context,
+	_ component.ReceiverCreateParams,
+	_ configmodels.Receiver,
+	_ consumer.MetricsConsumer,
 ) (component.MetricsReceiver, error) {
 	return &config.ExampleReceiverProducer{}, nil
 }

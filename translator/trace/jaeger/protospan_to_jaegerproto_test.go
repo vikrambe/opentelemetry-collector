@@ -24,8 +24,8 @@ import (
 	resourcepb "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	"github.com/golang/protobuf/ptypes/timestamp"
-	"github.com/google/go-cmp/cmp"
 	jaeger "github.com/jaegertracing/jaeger/model"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
@@ -79,15 +79,11 @@ func TestOCProtoToJaegerProto(t *testing.T) {
 		sortJaegerProtoBatch(gotJBatch)
 		sortJaegerProtoBatch(wantJBatch)
 
-		if diff := cmp.Diff(gotJBatch, wantJBatch); diff != "" {
-			// Note: Lines with "-" at the beginning refer to values in gotJBatch. Lines with "+" refer to values in
-			// wantJBatch.
-			t.Errorf("OC Proto to Jaeger Proto failed with following difference: \n%s", diff)
-		}
+		assert.EqualValues(t, wantJBatch, gotJBatch)
 	}
 }
 
-// Helper method to sort jaeger.Batch for cmp.Diff.
+// Helper method to sort jaeger.Batch for assert.EqualValues.
 func sortJaegerProtoBatch(batch *jaeger.Batch) {
 	// First sort the process tags.
 	sort.Slice(batch.Process.Tags, func(i, j int) bool {
@@ -96,9 +92,9 @@ func sortJaegerProtoBatch(batch *jaeger.Batch) {
 	// Sort the span tags and the span log fields.
 	for _, jSpan := range batch.Spans {
 
-		// cmp.Diff ends up comparing batch.Spans[].Process where it doesn't handle nil references well.
+		// assert.EqualValues ends up comparing batch.Spans[].Process where it doesn't handle nil references well.
 		// For reading purposes https://github.com/google/go-cmp/issues/61
-		// To make cmp.Diff bypass the panic, set the Process of the Span to be that of the Batch only for
+		// To make assert.EqualValues bypass the panic, set the Process of the Span to be that of the Batch only for
 		// testing purposes.
 		if jSpan.Process == nil {
 			jSpan.Process = batch.Process
@@ -137,6 +133,11 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 					Key:    tracetranslator.TagStatusCode,
 					VInt64: int64(10),
 					VType:  jaeger.ValueType_INT64,
+				},
+				{
+					Key:   tracetranslator.TagError,
+					VBool: true,
+					VType: jaeger.ValueType_BOOL,
 				},
 			},
 		},
@@ -177,6 +178,11 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 					VStr:  "Forbidden",
 					VType: jaeger.ValueType_STRING,
 				},
+				{
+					Key:   tracetranslator.TagError,
+					VBool: true,
+					VType: jaeger.ValueType_BOOL,
+				},
 			},
 		},
 
@@ -198,6 +204,11 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 							StringValue: &tracepb.TruncatableString{Value: "Error"},
 						},
 					},
+					"error": {
+						Value: &tracepb.AttributeValue_BoolValue{
+							BoolValue: true,
+						},
+					},
 				},
 			},
 			wantTags: []jaeger.KeyValue{
@@ -210,6 +221,11 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 					Key:   tracetranslator.TagStatusMsg,
 					VStr:  "Error",
 					VType: jaeger.ValueType_STRING,
+				},
+				{
+					Key:   tracetranslator.TagError,
+					VBool: true,
+					VType: jaeger.ValueType_BOOL,
 				},
 			},
 		},
@@ -302,6 +318,11 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 					VStr:  "Forbidden",
 					VType: jaeger.ValueType_STRING,
 				},
+				{
+					Key:   tracetranslator.TagError,
+					VBool: true,
+					VType: jaeger.ValueType_BOOL,
+				},
 			},
 		},
 	}
@@ -325,6 +346,9 @@ func TestOCStatusToJaegerProtoTags(t *testing.T) {
 		gs := gb.Spans[0]
 		sort.Slice(gs.Tags, func(i, j int) bool {
 			return gs.Tags[i].Key < gs.Tags[j].Key
+		})
+		sort.Slice(c.wantTags, func(i, j int) bool {
+			return c.wantTags[i].Key < c.wantTags[j].Key
 		})
 		if !reflect.DeepEqual(c.wantTags, gs.Tags) {
 			t.Fatalf("%d: Unsuccessful conversion\nGot:\n\t%v\nWant:\n\t%v", i, gs.Tags, c.wantTags)

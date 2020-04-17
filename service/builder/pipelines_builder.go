@@ -16,15 +16,15 @@ package builder
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/converter"
 	"github.com/open-telemetry/opentelemetry-collector/processor"
 )
 
@@ -32,6 +32,7 @@ import (
 // It can have a trace and/or a metrics consumer (the consumer is either the first
 // processor in the pipeline or the exporter if pipeline has no processors).
 type builtPipeline struct {
+	logger  *zap.Logger
 	firstTC consumer.TraceConsumerBase
 	firstMC consumer.MetricsConsumerBase
 
@@ -45,37 +46,37 @@ type builtPipeline struct {
 // BuiltPipelines is a map of build pipelines created from pipeline configs.
 type BuiltPipelines map[*configmodels.Pipeline]*builtPipeline
 
-func (bps BuiltPipelines) StartProcessors(logger *zap.Logger, host component.Host) error {
-	for cfg, bp := range bps {
-		logger.Info("Pipeline is starting...", zap.String("pipeline", cfg.Name))
+func (bps BuiltPipelines) StartProcessors(ctx context.Context, host component.Host) error {
+	for _, bp := range bps {
+		bp.logger.Info("Pipeline is starting...")
 		// Start in reverse order, starting from the back of processors pipeline.
 		// This is important so that processors that are earlier in the pipeline and
 		// reference processors that are later in the pipeline do not start sending
 		// data to later pipelines which are not yet started.
 		for i := len(bp.processors) - 1; i >= 0; i-- {
-			if err := bp.processors[i].Start(host); err != nil {
+			if err := bp.processors[i].Start(ctx, host); err != nil {
 				return err
 			}
 		}
-		logger.Info("Pipeline is started.", zap.String("pipeline", cfg.Name))
+		bp.logger.Info("Pipeline is started.")
 	}
 	return nil
 }
 
-func (bps BuiltPipelines) ShutdownProcessors(logger *zap.Logger) error {
+func (bps BuiltPipelines) ShutdownProcessors(ctx context.Context) error {
 	var errs []error
-	for cfg, bp := range bps {
-		logger.Info("Pipeline is shutting down...", zap.String("pipeline", cfg.Name))
+	for _, bp := range bps {
+		bp.logger.Info("Pipeline is shutting down...")
 		for _, p := range bp.processors {
-			if err := p.Shutdown(); err != nil {
+			if err := p.Shutdown(ctx); err != nil {
 				errs = append(errs, err)
 			}
 		}
-		logger.Info("Pipeline is shutdown.", zap.String("pipeline", cfg.Name))
+		bp.logger.Info("Pipeline is shutdown.")
 	}
 
 	if len(errs) != 0 {
-		return oterr.CombineErrors(errs)
+		return componenterror.CombineErrors(errs)
 	}
 	return nil
 }
@@ -117,8 +118,7 @@ func (pb *PipelinesBuilder) Build() (BuiltPipelines, error) {
 // Builds a pipeline of processors. Returns the first processor in the pipeline.
 // The last processor in the pipeline will be plugged to fan out the data into exporters
 // that are configured for this pipeline.
-func (pb *PipelinesBuilder) buildPipeline(
-	pipelineCfg *configmodels.Pipeline,
+func (pb *PipelinesBuilder) buildPipeline(pipelineCfg *configmodels.Pipeline,
 ) (*builtPipeline, error) {
 
 	// BuildProcessors the pipeline backwards.
@@ -152,10 +152,11 @@ func (pb *PipelinesBuilder) buildPipeline(
 		// it becomes the next for the previous one (previous in the pipeline,
 		// which we will build in the next loop iteration).
 		var err error
+		componentLogger := pb.logger.With(zap.String(kindLogKey, kindLogProcessor), zap.String(typeLogKey, procCfg.Type()), zap.String(nameLogKey, procCfg.Name()))
 		switch pipelineCfg.InputType {
 		case configmodels.TracesDataType:
 			var proc component.TraceProcessorBase
-			proc, err = createTraceProcessor(factory, pb.logger, procCfg, tc)
+			proc, err = createTraceProcessor(factory, componentLogger, procCfg, tc)
 			if proc != nil {
 				mutatesConsumedData = mutatesConsumedData || proc.GetCapabilities().MutatesConsumedData
 			}
@@ -163,7 +164,7 @@ func (pb *PipelinesBuilder) buildPipeline(
 			tc = proc
 		case configmodels.MetricsDataType:
 			var proc component.MetricsProcessorBase
-			proc, err = createMetricsProcessor(factory, pb.logger, procCfg, mc)
+			proc, err = createMetricsProcessor(factory, componentLogger, procCfg, mc)
 			if proc != nil {
 				mutatesConsumedData = mutatesConsumedData || proc.GetCapabilities().MutatesConsumedData
 			}
@@ -182,9 +183,12 @@ func (pb *PipelinesBuilder) buildPipeline(
 		}
 	}
 
-	pb.logger.Info("Pipeline is enabled.", zap.String("pipelines", pipelineCfg.Name))
+	pipelineLogger := pb.logger.With(zap.String("pipeline_name", pipelineCfg.Name),
+		zap.String("pipeline_datatype", pipelineCfg.InputType.GetString()))
+	pipelineLogger.Info("Pipeline is enabled.")
 
 	bp := &builtPipeline{
+		pipelineLogger,
 		tc,
 		mc,
 		mutatesConsumedData,
@@ -259,19 +263,22 @@ func createTraceProcessor(
 
 		// If processor is of the new type, but downstream consumer is of the old type,
 		// use internalToOCTraceConverter compatibility shim.
-		traceConverter := consumer.NewInternalToOCTraceConverter(nextConsumer.(consumer.TraceConsumerOld))
+		traceConverter := converter.NewInternalToOCTraceConverter(nextConsumer.(consumer.TraceConsumerOld))
 		return factory.CreateTraceProcessor(ctx, creationParams, traceConverter, cfg)
 	}
+
+	factoryOld := factoryBase.(component.ProcessorFactoryOld)
 
 	// If both processor and consumer are of the old type (can manipulate on OC traces only),
 	// use ProcessorFactoryOld.CreateTraceProcessor.
 	if nextConsumerOld, ok := nextConsumer.(consumer.TraceConsumerOld); ok {
-		return factoryBase.(component.ProcessorFactoryOld).CreateTraceProcessor(logger, nextConsumerOld, cfg)
+		return factoryOld.CreateTraceProcessor(logger, nextConsumerOld, cfg)
 	}
 
-	// Old type processor and a new type consumer usecase is not supported.
-	// TODO: This case can be supported since we have OC->internal traces translation function
-	return nil, errors.New("OC Traces -> internal data format translation is not supported")
+	// If processor is of the old type, but downstream consumer is of the new type,
+	// use NewInternalToOCTraceConverter compatibility shim to convert traces from internal format to OC.
+	traceConverter := converter.NewOCToInternalTraceConverter(nextConsumer.(consumer.TraceConsumer))
+	return factoryOld.CreateTraceProcessor(logger, traceConverter, cfg)
 }
 
 // createMetricsProcessor creates metric processor based on type of the current processor
@@ -294,17 +301,20 @@ func createMetricsProcessor(
 
 		// If processor is of the new type, but downstream consumer is of the old type,
 		// use internalToOCMetricsConverter compatibility shim.
-		metricsConverter := consumer.NewInternalToOCMetricsConverter(nextConsumer.(consumer.MetricsConsumerOld))
+		metricsConverter := converter.NewInternalToOCMetricsConverter(nextConsumer.(consumer.MetricsConsumerOld))
 		return factory.CreateMetricsProcessor(ctx, creationParams, metricsConverter, cfg)
 	}
+
+	factoryOld := factoryBase.(component.ProcessorFactoryOld)
 
 	// If both processor and consumer are of the old type (can manipulate on OC metrics only),
 	// use ProcessorFactoryOld.CreateMetricsProcessor.
 	if nextConsumerOld, ok := nextConsumer.(consumer.MetricsConsumerOld); ok {
-		return factoryBase.(component.ProcessorFactoryOld).CreateMetricsProcessor(logger, nextConsumerOld, cfg)
+		return factoryOld.CreateMetricsProcessor(logger, nextConsumerOld, cfg)
 	}
 
-	// Old type processor and a new type consumer usecase is not supported.
-	// TODO: This case can be supported once we have OC->internal metrics translation function
-	return nil, errors.New("OC Metrics -> internal data format translation is not supported")
+	// If processor is of the old type, but downstream consumer is of the new type,
+	// use NewInternalToOCMetricsConverter compatibility shim to convert metrics from internal format to OC.
+	metricsConverter := converter.NewOCToInternalMetricsConverter(nextConsumer.(consumer.MetricsConsumer))
+	return factoryOld.CreateMetricsProcessor(logger, metricsConverter, cfg)
 }

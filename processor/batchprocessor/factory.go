@@ -15,7 +15,8 @@
 package batchprocessor
 
 import (
-	"go.uber.org/zap"
+	"context"
+	"time"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
@@ -26,6 +27,9 @@ import (
 const (
 	// The value of "type" key in configuration.
 	typeStr = "batch"
+
+	defaultSendBatchSize = uint32(8192)
+	defaultTimeout       = 200 * time.Millisecond
 )
 
 // Factory is the factory for batch processor.
@@ -39,65 +43,37 @@ func (f *Factory) Type() string {
 
 // CreateDefaultConfig creates the default configuration for processor.
 func (f *Factory) CreateDefaultConfig() configmodels.Processor {
-	removeAfterTicks := int(defaultRemoveAfterCycles)
-	sendBatchSize := int(defaultSendBatchSize)
-	tickTime := defaultTickTime
-	timeout := defaultTimeout
+	return generateDefaultConfig()
+}
 
+// CreateTraceProcessor creates a trace processor based on this config.
+func (f *Factory) CreateTraceProcessor(
+	ctx context.Context,
+	params component.ProcessorCreateParams,
+	nextConsumer consumer.TraceConsumer,
+	c configmodels.Processor,
+) (component.TraceProcessor, error) {
+	cfg := c.(*Config)
+	return newBatchProcessor(params, nextConsumer, cfg), nil
+}
+
+// CreateMetricsProcessor creates a metrics processor based on this config.
+func (f *Factory) CreateMetricsProcessor(
+	ctx context.Context,
+	params component.ProcessorCreateParams,
+	nextConsumer consumer.MetricsConsumer,
+	cfg configmodels.Processor,
+) (component.MetricsProcessor, error) {
+	return nil, configerror.ErrDataTypeIsNotSupported
+}
+
+func generateDefaultConfig() *Config {
 	return &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
 			NameVal: typeStr,
 		},
-		RemoveAfterTicks: &removeAfterTicks,
-		SendBatchSize:    &sendBatchSize,
-		NumTickers:       defaultNumTickers,
-		TickTime:         &tickTime,
-		Timeout:          &timeout,
+		SendBatchSize: defaultSendBatchSize,
+		Timeout:       defaultTimeout,
 	}
-}
-
-// CreateTraceProcessor creates a trace processor based on this config.
-func (f *Factory) CreateTraceProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.TraceConsumerOld,
-	c configmodels.Processor,
-) (component.TraceProcessorOld, error) {
-	cfg := c.(*Config)
-
-	var batchingOptions []Option
-	if cfg.Timeout != nil {
-		batchingOptions = append(batchingOptions, WithTimeout(*cfg.Timeout))
-	}
-	if cfg.NumTickers > 0 {
-		batchingOptions = append(
-			batchingOptions, WithNumTickers(cfg.NumTickers),
-		)
-	}
-	if cfg.TickTime != nil {
-		batchingOptions = append(
-			batchingOptions, WithTickTime(*cfg.TickTime),
-		)
-	}
-	if cfg.SendBatchSize != nil {
-		batchingOptions = append(
-			batchingOptions, WithSendBatchSize(*cfg.SendBatchSize),
-		)
-	}
-	if cfg.RemoveAfterTicks != nil {
-		batchingOptions = append(
-			batchingOptions, WithRemoveAfterTicks(*cfg.RemoveAfterTicks),
-		)
-	}
-
-	return NewBatcher(cfg.NameVal, logger, nextConsumer, batchingOptions...), nil
-}
-
-// CreateMetricsProcessor creates a metrics processor based on this config.
-func (f *Factory) CreateMetricsProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.MetricsConsumerOld,
-	cfg configmodels.Processor,
-) (component.MetricsProcessorOld, error) {
-	return nil, configerror.ErrDataTypeIsNotSupported
 }

@@ -27,7 +27,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/observability"
 	"github.com/open-telemetry/opentelemetry-collector/observability/observabilitytest"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
@@ -69,7 +69,7 @@ func TestTraceExporterOld_Default(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Nil(t, te.ConsumeTraceData(context.Background(), td))
-	assert.Nil(t, te.Shutdown())
+	assert.Nil(t, te.Shutdown(context.Background()))
 }
 
 func TestTraceExporterOld_Default_ReturnError(t *testing.T) {
@@ -135,25 +135,25 @@ func TestTraceExporterOld_WithSpan_ReturnError(t *testing.T) {
 
 func TestTraceExporterOld_WithShutdown(t *testing.T) {
 	shutdownCalled := false
-	shutdown := func() error { shutdownCalled = true; return nil }
+	shutdown := func(context.Context) error { shutdownCalled = true; return nil }
 
 	te, err := NewTraceExporterOld(fakeTraceExporterConfig, newTraceDataPusherOld(0, nil), WithShutdown(shutdown))
 	assert.NotNil(t, te)
 	assert.Nil(t, err)
 
-	assert.Nil(t, te.Shutdown())
+	assert.Nil(t, te.Shutdown(context.Background()))
 	assert.True(t, shutdownCalled)
 }
 
 func TestTraceExporterOld_WithShutdown_ReturnError(t *testing.T) {
 	want := errors.New("my_error")
-	shutdownErr := func() error { return want }
+	shutdownErr := func(context.Context) error { return want }
 
 	te, err := NewTraceExporterOld(fakeTraceExporterConfig, newTraceDataPusherOld(0, nil), WithShutdown(shutdownErr))
 	assert.NotNil(t, te)
 	assert.Nil(t, err)
 
-	assert.Equal(t, te.Shutdown(), want)
+	assert.Equal(t, te.Shutdown(context.Background()), want)
 }
 
 func newTraceDataPusherOld(droppedSpans int, retError error) traceDataPusherOld {
@@ -250,23 +250,23 @@ func TestTraceExporter_NilPushTraceData(t *testing.T) {
 }
 
 func TestTraceExporter_Default(t *testing.T) {
-	td := data.NewTraceData()
+	td := pdata.NewTraces()
 	te, err := NewTraceExporter(fakeTraceExporterConfig, newTraceDataPusher(0, nil))
 	assert.NotNil(t, te)
 	assert.Nil(t, err)
 
-	assert.Nil(t, te.ConsumeTrace(context.Background(), td))
-	assert.Nil(t, te.Shutdown())
+	assert.Nil(t, te.ConsumeTraces(context.Background(), td))
+	assert.Nil(t, te.Shutdown(context.Background()))
 }
 
 func TestTraceExporter_Default_ReturnError(t *testing.T) {
-	td := data.NewTraceData()
+	td := pdata.NewTraces()
 	want := errors.New("my_error")
 	te, err := NewTraceExporter(fakeTraceExporterConfig, newTraceDataPusher(0, want))
 	require.Nil(t, err)
 	require.NotNil(t, te)
 
-	err = te.ConsumeTrace(context.Background(), td)
+	err = te.ConsumeTraces(context.Background(), td)
 	require.Equalf(t, want, err, "ConsumeTraceData returns: Want %v Got %v", want, err)
 }
 
@@ -322,29 +322,29 @@ func TestTraceExporter_WithSpan_ReturnError(t *testing.T) {
 
 func TestTraceExporter_WithShutdown(t *testing.T) {
 	shutdownCalled := false
-	shutdown := func() error { shutdownCalled = true; return nil }
+	shutdown := func(context.Context) error { shutdownCalled = true; return nil }
 
 	te, err := NewTraceExporter(fakeTraceExporterConfig, newTraceDataPusher(0, nil), WithShutdown(shutdown))
 	assert.NotNil(t, te)
 	assert.Nil(t, err)
 
-	assert.Nil(t, te.Shutdown())
+	assert.Nil(t, te.Shutdown(context.Background()))
 	assert.True(t, shutdownCalled)
 }
 
 func TestTraceExporter_WithShutdown_ReturnError(t *testing.T) {
 	want := errors.New("my_error")
-	shutdownErr := func() error { return want }
+	shutdownErr := func(context.Context) error { return want }
 
 	te, err := NewTraceExporter(fakeTraceExporterConfig, newTraceDataPusher(0, nil), WithShutdown(shutdownErr))
 	assert.NotNil(t, te)
 	assert.Nil(t, err)
 
-	assert.Equal(t, te.Shutdown(), want)
+	assert.Equal(t, te.Shutdown(context.Background()), want)
 }
 
 func newTraceDataPusher(droppedSpans int, retError error) traceDataPusher {
-	return func(ctx context.Context, td data.TraceData) (int, error) {
+	return func(ctx context.Context, td pdata.Traces) (int, error) {
 		return droppedSpans, retError
 	}
 }
@@ -354,14 +354,15 @@ func checkRecordedMetricsForTraceExporter(t *testing.T, te component.TraceExport
 	defer doneFn()
 
 	const spansLen = 2
-	td := data.NewTraceData()
-	td.SetResourceSpans(data.NewResourceSpansSlice(1))
-	td.ResourceSpans().Get(0).SetInstrumentationLibrarySpans(data.NewInstrumentationLibrarySpansSlice(1))
-	td.ResourceSpans().Get(0).InstrumentationLibrarySpans().Get(0).SetSpans(data.NewSpanSlice(spansLen))
+	td := pdata.NewTraces()
+	rs := td.ResourceSpans()
+	rs.Resize(1)
+	rs.At(0).InstrumentationLibrarySpans().Resize(1)
+	rs.At(0).InstrumentationLibrarySpans().At(0).Spans().Resize(spansLen)
 	ctx := observability.ContextWithReceiverName(context.Background(), fakeTraceReceiverName)
 	const numBatches = 7
 	for i := 0; i < numBatches; i++ {
-		require.Equal(t, wantError, te.ConsumeTrace(ctx, td))
+		require.Equal(t, wantError, te.ConsumeTraces(ctx, td))
 	}
 
 	err := observabilitytest.CheckValueViewExporterReceivedSpans(fakeTraceReceiverName, fakeTraceExporterName, numBatches*spansLen)
@@ -372,14 +373,15 @@ func checkRecordedMetricsForTraceExporter(t *testing.T, te component.TraceExport
 }
 
 func generateTraceTraffic(t *testing.T, te component.TraceExporter, numRequests int, wantError error) {
-	td := data.NewTraceData()
-	td.SetResourceSpans(data.NewResourceSpansSlice(1))
-	td.ResourceSpans().Get(0).SetInstrumentationLibrarySpans(data.NewInstrumentationLibrarySpansSlice(1))
-	td.ResourceSpans().Get(0).InstrumentationLibrarySpans().Get(0).SetSpans(data.NewSpanSlice(1))
+	td := pdata.NewTraces()
+	rs := td.ResourceSpans()
+	rs.Resize(1)
+	rs.At(0).InstrumentationLibrarySpans().Resize(1)
+	rs.At(0).InstrumentationLibrarySpans().At(0).Spans().Resize(1)
 	ctx, span := trace.StartSpan(context.Background(), fakeTraceParentSpanName, trace.WithSampler(trace.AlwaysSample()))
 	defer span.End()
 	for i := 0; i < numRequests; i++ {
-		require.Equal(t, wantError, te.ConsumeTrace(ctx, td))
+		require.Equal(t, wantError, te.ConsumeTraces(ctx, td))
 	}
 }
 

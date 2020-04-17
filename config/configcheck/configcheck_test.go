@@ -15,21 +15,21 @@
 package configcheck
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/defaults"
+	"github.com/open-telemetry/opentelemetry-collector/service/defaultcomponents"
 )
 
 func TestValidateConfigFromFactories_Success(t *testing.T) {
-	factories, err := defaults.Components()
+	factories, err := defaultcomponents.Components()
 	require.NoError(t, err)
 
 	err = ValidateConfigFromFactories(factories)
@@ -37,7 +37,7 @@ func TestValidateConfigFromFactories_Success(t *testing.T) {
 }
 
 func TestValidateConfigFromFactories_Failure(t *testing.T) {
-	factories, err := defaults.Components()
+	factories, err := defaultcomponents.Components()
 	require.NoError(t, err)
 
 	// Add a factory returning config not following pattern to force error.
@@ -198,9 +198,6 @@ func (b badConfigExtensionFactory) CreateDefaultConfig() configmodels.Extension 
 	}{}
 }
 
-func (b badConfigExtensionFactory) CreateExtension(
-	logger *zap.Logger,
-	cfg configmodels.Extension,
-) (component.ServiceExtension, error) {
+func (b badConfigExtensionFactory) CreateExtension(_ context.Context, _ component.ExtensionCreateParams, _ configmodels.Extension) (component.ServiceExtension, error) {
 	return nil, nil
 }

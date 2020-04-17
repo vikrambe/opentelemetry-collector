@@ -25,10 +25,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exporterhelper"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
 )
 
 type ocAgentExporter struct {
@@ -108,7 +108,7 @@ func NewMetricsExporter(logger *zap.Logger, config configmodels.Exporter, opts .
 	if err != nil {
 		return nil, err
 	}
-	oexp, err := exporterhelper.NewMetricsExporter(
+	oexp, err := exporterhelper.NewMetricsExporterOld(
 		config,
 		oce.PushMetricsData,
 		exporterhelper.WithShutdown(oce.Shutdown))
@@ -119,7 +119,7 @@ func NewMetricsExporter(logger *zap.Logger, config configmodels.Exporter, opts .
 	return oexp, nil
 }
 
-func (oce *ocAgentExporter) Shutdown() error {
+func (oce *ocAgentExporter) Shutdown(context.Context) error {
 	wg := &sync.WaitGroup{}
 	var errors []error
 	var errorsMu sync.Mutex
@@ -145,7 +145,7 @@ func (oce *ocAgentExporter) Shutdown() error {
 	wg.Wait()
 	close(oce.exporters)
 
-	return oterr.CombineErrors(errors)
+	return componenterror.CombineErrors(errors)
 }
 
 func (oce *ocAgentExporter) PushTraceData(ctx context.Context, td consumerdata.TraceData) (int, error) {

@@ -28,9 +28,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
 	"github.com/open-telemetry/opentelemetry-collector/processor/samplingprocessor/tailsamplingprocessor/idbatcher"
 	"github.com/open-telemetry/opentelemetry-collector/processor/samplingprocessor/tailsamplingprocessor/sampling"
 )
@@ -70,11 +70,11 @@ const (
 	sourceFormat = "tail_sampling"
 )
 
-// NewTraceProcessor returns a processor.TraceProcessor that will perform tail sampling according to the given
+// newTraceProcessor returns a processor.TraceProcessor that will perform tail sampling according to the given
 // configuration.
-func NewTraceProcessor(logger *zap.Logger, nextConsumer consumer.TraceConsumerOld, cfg Config) (component.TraceProcessorOld, error) {
+func newTraceProcessor(logger *zap.Logger, nextConsumer consumer.TraceConsumerOld, cfg Config) (component.TraceProcessorOld, error) {
 	if nextConsumer == nil {
-		return nil, oterr.ErrNilNextConsumer
+		return nil, componenterror.ErrNilNextConsumer
 	}
 
 	numDecisionBatches := uint64(cfg.DecisionWait.Seconds())
@@ -314,12 +314,12 @@ func (tsp *tailSamplingSpanProcessor) GetCapabilities() component.ProcessorCapab
 }
 
 // Start is invoked during service startup.
-func (tsp *tailSamplingSpanProcessor) Start(host component.Host) error {
+func (tsp *tailSamplingSpanProcessor) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 // Shutdown is invoked during service shutdown.
-func (tsp *tailSamplingSpanProcessor) Shutdown() error {
+func (tsp *tailSamplingSpanProcessor) Shutdown(context.Context) error {
 	return nil
 }
 

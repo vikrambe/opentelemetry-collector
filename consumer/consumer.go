@@ -19,7 +19,7 @@ import (
 	"context"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 )
 
 // MetricsConsumerBase defines a common interface for MetricsConsumerOld and MetricsConsumer.
@@ -34,11 +34,11 @@ type MetricsConsumerOld interface {
 	ConsumeMetricsData(ctx context.Context, md consumerdata.MetricsData) error
 }
 
-// MetricsConsumer is the new metrics consumer interface that receives data.MetricData, processes it
+// MetricsConsumer is the new metrics consumer interface that receives pdata.MetricData, processes it
 // as needed, and sends it to the next processing node if any or to the destination.
 type MetricsConsumer interface {
 	MetricsConsumerBase
-	ConsumeMetrics(ctx context.Context, md data.MetricData) error
+	ConsumeMetrics(ctx context.Context, md pdata.Metrics) error
 }
 
 // TraceConsumerBase defines a common interface for TraceConsumerOld and TraceConsumer.
@@ -53,10 +53,10 @@ type TraceConsumerOld interface {
 	ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error
 }
 
-// TraceConsumer is an interface that receives data.TraceData, processes it
+// TraceConsumer is an interface that receives pdata.Traces, processes it
 // as needed, and sends it to the next processing node if any or to the destination.
 type TraceConsumer interface {
 	TraceConsumerBase
-	// ConsumeTrace receives data.TraceData for processing.
-	ConsumeTrace(ctx context.Context, td data.TraceData) error
+	// ConsumeTraces receives pdata.Traces for processing.
+	ConsumeTraces(ctx context.Context, td pdata.Traces) error
 }

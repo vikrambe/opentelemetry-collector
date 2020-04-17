@@ -15,6 +15,8 @@
 package memorylimiter
 
 import (
+	"context"
+
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
@@ -39,54 +41,55 @@ func (f *Factory) Type() string {
 // CreateDefaultConfig creates the default configuration for processor. Notice
 // that the default configuration is expected to fail for this processor.
 func (f *Factory) CreateDefaultConfig() configmodels.Processor {
+	return generateDefaultConfig()
+}
+
+// CreateTraceProcessor creates a trace processor based on this config.
+func (f *Factory) CreateTraceProcessor(
+	_ context.Context,
+	params component.ProcessorCreateParams,
+	nextConsumer consumer.TraceConsumer,
+	cfg configmodels.Processor,
+) (component.TraceProcessor, error) {
+	return f.createProcessor(params.Logger, nextConsumer, nil, cfg)
+}
+
+// CreateMetricsProcessor creates a metrics processor based on this config.
+func (f *Factory) CreateMetricsProcessor(
+	_ context.Context,
+	params component.ProcessorCreateParams,
+	nextConsumer consumer.MetricsConsumer,
+	cfg configmodels.Processor,
+) (component.MetricsProcessor, error) {
+	return f.createProcessor(params.Logger, nil, nextConsumer, cfg)
+}
+
+type DualTypeProcessor interface {
+	consumer.TraceConsumer
+	consumer.MetricsConsumer
+	component.Processor
+}
+
+func (f *Factory) createProcessor(
+	logger *zap.Logger,
+	traceConsumer consumer.TraceConsumer,
+	metricConsumer consumer.MetricsConsumer,
+	cfg configmodels.Processor,
+) (DualTypeProcessor, error) {
+	pCfg := cfg.(*Config)
+	return newMemoryLimiter(
+		logger,
+		traceConsumer,
+		metricConsumer,
+		pCfg,
+	)
+}
+
+func generateDefaultConfig() *Config {
 	return &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
 			NameVal: typeStr,
 		},
 	}
-}
-
-// CreateTraceProcessor creates a trace processor based on this config.
-func (f *Factory) CreateTraceProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.TraceConsumerOld,
-	cfg configmodels.Processor,
-) (component.TraceProcessorOld, error) {
-	return f.createProcessor(logger, nextConsumer, nil, cfg)
-}
-
-// CreateMetricsProcessor creates a metrics processor based on this config.
-func (f *Factory) CreateMetricsProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.MetricsConsumerOld,
-	cfg configmodels.Processor,
-) (component.MetricsProcessorOld, error) {
-	return f.createProcessor(logger, nil, nextConsumer, cfg)
-}
-
-type DualTypeProcessor interface {
-	consumer.TraceConsumerOld
-	consumer.MetricsConsumerOld
-	component.Processor
-}
-
-func (f *Factory) createProcessor(
-	logger *zap.Logger,
-	traceConsumer consumer.TraceConsumerOld,
-	metricConsumer consumer.MetricsConsumerOld,
-	cfg configmodels.Processor,
-) (DualTypeProcessor, error) {
-	const mibBytes = 1024 * 1024
-	pCfg := cfg.(*Config)
-	return New(
-		cfg.Name(),
-		traceConsumer,
-		metricConsumer,
-		pCfg.CheckInterval,
-		uint64(pCfg.MemoryLimitMiB)*mibBytes,
-		uint64(pCfg.MemorySpikeLimitMiB)*mibBytes,
-		uint64(pCfg.BallastSizeMiB)*mibBytes,
-		logger,
-	)
 }

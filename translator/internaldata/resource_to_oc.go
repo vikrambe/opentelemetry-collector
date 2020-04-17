@@ -23,11 +23,11 @@ import (
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
 	"github.com/golang/protobuf/ptypes"
 
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
 )
 
-func internalResourceToOC(resource data.Resource) (*occommon.Node, *ocresource.Resource) {
+func internalResourceToOC(resource pdata.Resource) (*occommon.Node, *ocresource.Resource) {
 	if resource.IsNil() {
 		return nil, nil
 	}
@@ -36,16 +36,15 @@ func internalResourceToOC(resource data.Resource) (*occommon.Node, *ocresource.R
 	ocNode := occommon.Node{}
 	ocResource := ocresource.Resource{}
 
-	if attrs.Len() == 0 {
+	if attrs.Cap() == 0 {
 		return &ocNode, &ocResource
 	}
 
-	labels := make(map[string]string, attrs.Len())
-	for i := 0; i < attrs.Len(); i++ {
-		akv := attrs.GetAttribute(i)
-		val := attributeValueToString(akv.Value())
+	labels := make(map[string]string, attrs.Cap())
+	attrs.ForEach(func(k string, v pdata.AttributeValue) {
+		val := attributeValueToString(v)
 
-		switch akv.Key() {
+		switch k {
 		case conventions.OCAttributeResourceType:
 			ocResource.Type = val
 		case conventions.AttributeServiceName:
@@ -56,11 +55,11 @@ func internalResourceToOC(resource data.Resource) (*occommon.Node, *ocresource.R
 		case conventions.OCAttributeProcessStartTime:
 			t, err := time.Parse(time.RFC3339Nano, val)
 			if err != nil {
-				continue
+				return
 			}
 			ts, err := ptypes.TimestampProto(t)
 			if err != nil {
-				continue
+				return
 			}
 			if ocNode.Identifier == nil {
 				ocNode.Identifier = &occommon.ProcessIdentifier{}
@@ -99,23 +98,23 @@ func internalResourceToOC(resource data.Resource) (*occommon.Node, *ocresource.R
 			}
 		default:
 			// Not a special attribute, put it into resource labels
-			labels[akv.Key()] = val
+			labels[k] = val
 		}
-	}
+	})
 	ocResource.Labels = labels
 
 	return &ocNode, &ocResource
 }
 
-func attributeValueToString(attr data.AttributeValue) string {
+func attributeValueToString(attr pdata.AttributeValue) string {
 	switch attr.Type() {
-	case data.AttributeValueSTRING:
+	case pdata.AttributeValueSTRING:
 		return attr.StringVal()
-	case data.AttributeValueBOOL:
+	case pdata.AttributeValueBOOL:
 		return strconv.FormatBool(attr.BoolVal())
-	case data.AttributeValueDOUBLE:
+	case pdata.AttributeValueDOUBLE:
 		return strconv.FormatFloat(attr.DoubleVal(), 'f', -1, 64)
-	case data.AttributeValueINT:
+	case pdata.AttributeValueINT:
 		return strconv.FormatInt(attr.IntVal(), 10)
 	default:
 		return fmt.Sprintf("<Unknown OpenTelemetry attribute value type %q>", attr.Type())

@@ -17,9 +17,7 @@ package internal
 var metricsFile = &File{
 	Name: "metrics",
 	imports: []string{
-		`otlpcommon "github.com/open-telemetry/opentelemetry-proto/gen/go/common/v1"`,
 		`otlpmetrics "github.com/open-telemetry/opentelemetry-proto/gen/go/metrics/v1"`,
-		`otlpresource "github.com/open-telemetry/opentelemetry-proto/gen/go/resource/v1"`,
 	},
 	testImports: []string{
 		`"testing"`,
@@ -63,10 +61,9 @@ var resourceMetrics = &messageStruct{
 	fields: []baseField{
 		resourceField,
 		&sliceField{
-			fieldMame:               "InstrumentationLibraryMetrics",
-			originFieldName:         "InstrumentationLibraryMetrics",
-			returnSlice:             instrumentationLibraryMetricsSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "InstrumentationLibraryMetrics",
+			originFieldName: "InstrumentationLibraryMetrics",
+			returnSlice:     instrumentationLibraryMetricsSlice,
 		},
 	},
 }
@@ -83,10 +80,9 @@ var instrumentationLibraryMetrics = &messageStruct{
 	fields: []baseField{
 		instrumentationLibraryField,
 		&sliceField{
-			fieldMame:               "Metrics",
-			originFieldName:         "Metrics",
-			returnSlice:             metricSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Metrics",
+			originFieldName: "Metrics",
+			returnSlice:     metricSlice,
 		},
 	},
 }
@@ -97,8 +93,9 @@ var metricSlice = &sliceStruct{
 }
 
 var metric = &messageStruct{
-	structName:     "Metric",
-	description:    "// MetricDescriptor is the descriptor of a metric.",
+	structName: "Metric",
+	description: "// Metric represents one metric as a collection of datapoints.\n" +
+		"// See Metric definition in OTLP: https://github.com/open-telemetry/opentelemetry-proto/blob/master/opentelemetry/proto/metrics/v1/metrics.proto#L96",
 	originFullName: "otlpmetrics.Metric",
 	fields: []baseField{
 		&messageField{
@@ -107,28 +104,24 @@ var metric = &messageStruct{
 			returnMessage:   metricDescriptor,
 		},
 		&sliceField{
-			fieldMame:               "Int64DataPoints",
-			originFieldName:         "Int64DataPoints",
-			returnSlice:             int64DataPointSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Int64DataPoints",
+			originFieldName: "Int64DataPoints",
+			returnSlice:     int64DataPointSlice,
 		},
 		&sliceField{
-			fieldMame:               "DoubleDataPoints",
-			originFieldName:         "DoubleDataPoints",
-			returnSlice:             doubleDataPointSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "DoubleDataPoints",
+			originFieldName: "DoubleDataPoints",
+			returnSlice:     doubleDataPointSlice,
 		},
 		&sliceField{
-			fieldMame:               "HistogramDataPoints",
-			originFieldName:         "HistogramDataPoints",
-			returnSlice:             histogramDataPointSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "HistogramDataPoints",
+			originFieldName: "HistogramDataPoints",
+			returnSlice:     histogramDataPointSlice,
 		},
 		&sliceField{
-			fieldMame:               "SummaryDataPoints",
-			originFieldName:         "SummaryDataPoints",
-			returnSlice:             summaryDataPointSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "SummaryDataPoints",
+			originFieldName: "SummaryDataPoints",
+			returnSlice:     summaryDataPointSlice,
 		},
 	},
 }
@@ -215,10 +208,9 @@ var histogramDataPoint = &messageStruct{
 		countField,
 		sumField,
 		&sliceField{
-			fieldMame:               "Buckets",
-			originFieldName:         "Buckets",
-			returnSlice:             histogramBucketSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Buckets",
+			originFieldName: "Buckets",
+			returnSlice:     histogramBucketSlice,
 		},
 		explicitBoundsField,
 	},
@@ -252,10 +244,9 @@ var histogramBucketExemplar = &messageStruct{
 		timeField,
 		valueFloat64Field,
 		&sliceField{
-			fieldMame:               "Attachments",
-			originFieldName:         "Attachments",
-			returnSlice:             stringMap,
-			constructorDefaultValue: "nil",
+			fieldMame:       "Attachments",
+			originFieldName: "Attachments",
+			returnSlice:     stringMap,
 		},
 	},
 }
@@ -276,10 +267,9 @@ var summaryDataPoint = &messageStruct{
 		countField,
 		sumField,
 		&sliceField{
-			fieldMame:               "ValueAtPercentiles",
-			originFieldName:         "PercentileValues",
-			returnSlice:             summaryValueAtPercentileSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "ValueAtPercentiles",
+			originFieldName: "PercentileValues",
+			returnSlice:     summaryValueAtPercentileSlice,
 		},
 	},
 }
@@ -300,10 +290,9 @@ var summaryValueAtPercentile = &messageStruct{
 }
 
 var labelsField = &sliceField{
-	fieldMame:               "LabelsMap",
-	originFieldName:         "Labels",
-	returnSlice:             stringMap,
-	constructorDefaultValue: "nil",
+	fieldMame:       "LabelsMap",
+	originFieldName: "Labels",
+	returnSlice:     stringMap,
 }
 
 var countField = &primitiveField{

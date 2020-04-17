@@ -20,38 +20,40 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdatautil"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
 )
 
-// PushMetricsData is a helper function that is similar to ConsumeMetricsData but also returns
+// PushMetricsDataOld is a helper function that is similar to ConsumeMetricsData but also returns
 // the number of dropped metrics.
-type PushMetricsData func(ctx context.Context, td consumerdata.MetricsData) (droppedTimeSeries int, err error)
+type PushMetricsDataOld func(ctx context.Context, td consumerdata.MetricsData) (droppedTimeSeries int, err error)
 
-type metricsExporter struct {
+type metricsExporterOld struct {
 	exporterFullName string
-	pushMetricsData  PushMetricsData
+	pushMetricsData  PushMetricsDataOld
 	shutdown         Shutdown
 }
 
-func (me *metricsExporter) Start(host component.Host) error {
+func (me *metricsExporterOld) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
-func (me *metricsExporter) ConsumeMetricsData(ctx context.Context, md consumerdata.MetricsData) error {
+func (me *metricsExporterOld) ConsumeMetricsData(ctx context.Context, md consumerdata.MetricsData) error {
 	exporterCtx := obsreport.ExporterContext(ctx, me.exporterFullName)
 	_, err := me.pushMetricsData(exporterCtx, md)
 	return err
 }
 
 // Shutdown stops the exporter and is invoked during shutdown.
-func (me *metricsExporter) Shutdown() error {
-	return me.shutdown()
+func (me *metricsExporterOld) Shutdown(ctx context.Context) error {
+	return me.shutdown(ctx)
 }
 
-// NewMetricsExporter creates an MetricsExporter that can record metrics and can wrap every request with a Span.
+// NewMetricsExporterOld creates an MetricsExporter that can record metrics and can wrap every request with a Span.
 // If no options are passed it just adds the exporter format as a tag in the Context.
 // TODO: Add support for retries.
-func NewMetricsExporter(config configmodels.Exporter, pushMetricsData PushMetricsData, options ...ExporterOption) (component.MetricsExporterOld, error) {
+func NewMetricsExporterOld(config configmodels.Exporter, pushMetricsData PushMetricsDataOld, options ...ExporterOption) (component.MetricsExporterOld, error) {
 	if config == nil {
 		return nil, errNilConfig
 	}
@@ -62,21 +64,21 @@ func NewMetricsExporter(config configmodels.Exporter, pushMetricsData PushMetric
 
 	opts := newExporterOptions(options...)
 
-	pushMetricsData = pushMetricsWithObservability(pushMetricsData, config.Name())
+	pushMetricsData = pushMetricsWithObservabilityOld(pushMetricsData, config.Name())
 
 	// The default shutdown method always returns nil.
 	if opts.shutdown == nil {
-		opts.shutdown = func() error { return nil }
+		opts.shutdown = func(context.Context) error { return nil }
 	}
 
-	return &metricsExporter{
+	return &metricsExporterOld{
 		exporterFullName: config.Name(),
 		pushMetricsData:  pushMetricsData,
 		shutdown:         opts.shutdown,
 	}, nil
 }
 
-func pushMetricsWithObservability(next PushMetricsData, exporterName string) PushMetricsData {
+func pushMetricsWithObservabilityOld(next PushMetricsDataOld, exporterName string) PushMetricsDataOld {
 	return func(ctx context.Context, md consumerdata.MetricsData) (int, error) {
 		ctx = obsreport.StartMetricsExportOp(ctx, exporterName)
 		numDroppedTimeSeries, err := next(ctx, md)
@@ -84,7 +86,7 @@ func pushMetricsWithObservability(next PushMetricsData, exporterName string) Pus
 		// TODO: this is not ideal: it should come from the next function itself.
 		// 	temporarily loading it from internal format. Once full switch is done
 		// 	to new metrics will remove this.
-		numReceivedTimeSeries, numPoints := measureMetricsExport(md)
+		numReceivedTimeSeries, numPoints := pdatautil.TimeseriesAndPointCount(md)
 
 		obsreport.EndMetricsExportOp(ctx, numPoints, numReceivedTimeSeries, numDroppedTimeSeries, err)
 		return numDroppedTimeSeries, err
@@ -100,15 +102,70 @@ func NumTimeSeries(md consumerdata.MetricsData) int {
 	return receivedTimeSeries
 }
 
-func measureMetricsExport(md consumerdata.MetricsData) (int, int) {
-	numTimeSeries := 0
-	numPoints := 0
-	for _, metric := range md.Metrics {
-		tss := metric.GetTimeseries()
-		numTimeSeries += len(metric.GetTimeseries())
-		for _, ts := range tss {
-			numPoints += len(ts.GetPoints())
-		}
+// PushMetricsData is a helper function that is similar to ConsumeMetricsData but also returns
+// the number of dropped metrics.
+type PushMetricsData func(ctx context.Context, md pdata.Metrics) (droppedTimeSeries int, err error)
+
+type metricsExporter struct {
+	exporterFullName string
+	pushMetricsData  PushMetricsData
+	shutdown         Shutdown
+}
+
+func (me *metricsExporter) Start(ctx context.Context, host component.Host) error {
+	return nil
+}
+
+func (me *metricsExporter) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
+	exporterCtx := obsreport.ExporterContext(ctx, me.exporterFullName)
+	_, err := me.pushMetricsData(exporterCtx, md)
+	return err
+}
+
+// Shutdown stops the exporter and is invoked during shutdown.
+func (me *metricsExporter) Shutdown(ctx context.Context) error {
+	return me.shutdown(ctx)
+}
+
+// NewMetricsExporter creates an MetricsExporter that can record metrics and can wrap every request with a Span.
+// If no options are passed it just adds the exporter format as a tag in the Context.
+// TODO: Add support for retries.
+func NewMetricsExporter(config configmodels.Exporter, pushMetricsData PushMetricsData, options ...ExporterOption) (component.MetricsExporter, error) {
+	if config == nil {
+		return nil, errNilConfig
 	}
-	return numTimeSeries, numPoints
+
+	if pushMetricsData == nil {
+		return nil, errNilPushMetricsData
+	}
+
+	opts := newExporterOptions(options...)
+
+	pushMetricsData = pushMetricsWithObservability(pushMetricsData, config.Name())
+
+	// The default shutdown method always returns nil.
+	if opts.shutdown == nil {
+		opts.shutdown = func(context.Context) error { return nil }
+	}
+
+	return &metricsExporter{
+		exporterFullName: config.Name(),
+		pushMetricsData:  pushMetricsData,
+		shutdown:         opts.shutdown,
+	}, nil
+}
+
+func pushMetricsWithObservability(next PushMetricsData, exporterName string) PushMetricsData {
+	return func(ctx context.Context, md pdata.Metrics) (int, error) {
+		ctx = obsreport.StartMetricsExportOp(ctx, exporterName)
+		numDroppedMetrics, err := next(ctx, md)
+
+		// TODO: this is not ideal: it should come from the next function itself.
+		// 	temporarily loading it from internal format. Once full switch is done
+		// 	to new metrics will remove this.
+		numReceivedMetrics, numPoints := pdatautil.MetricAndDataPointCount(md)
+
+		obsreport.EndMetricsExportOp(ctx, numPoints, numReceivedMetrics, numDroppedMetrics, err)
+		return numReceivedMetrics, err
+	}
 }

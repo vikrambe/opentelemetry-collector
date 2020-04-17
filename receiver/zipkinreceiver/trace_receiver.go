@@ -17,9 +17,9 @@ package zipkinreceiver
 import (
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
@@ -38,11 +38,11 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector/client"
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/internal"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
 	"github.com/open-telemetry/opentelemetry-collector/translator/trace/zipkin"
 )
@@ -74,7 +74,7 @@ var _ http.Handler = (*ZipkinReceiver)(nil)
 // New creates a new zipkinreceiver.ZipkinReceiver reference.
 func New(instanceName, address string, nextConsumer consumer.TraceConsumerOld) (*ZipkinReceiver, error) {
 	if nextConsumer == nil {
-		return nil, oterr.ErrNilNextConsumer
+		return nil, componenterror.ErrNilNextConsumer
 	}
 
 	zr := &ZipkinReceiver{
@@ -104,7 +104,7 @@ func (zr *ZipkinReceiver) WithHTTPServer(s *http.Server) *ZipkinReceiver {
 }
 
 // Start spins up the receiver's HTTP server and makes the receiver start its processing.
-func (zr *ZipkinReceiver) Start(host component.Host) error {
+func (zr *ZipkinReceiver) Start(ctx context.Context, host component.Host) error {
 	if host == nil {
 		return errors.New("nil host")
 	}
@@ -112,7 +112,7 @@ func (zr *ZipkinReceiver) Start(host component.Host) error {
 	zr.mu.Lock()
 	defer zr.mu.Unlock()
 
-	var err = oterr.ErrAlreadyStarted
+	var err = componenterror.ErrAlreadyStarted
 
 	zr.startOnce.Do(func() {
 		ln, lerr := net.Listen("tcp", zr.address())
@@ -204,15 +204,15 @@ func (zr *ZipkinReceiver) v2ToTraceSpans(blob []byte, hdr http.Header) (reqs []c
 	uniqueNodes := make([]*commonpb.Node, 0, len(zipkinSpans))
 	// Now translate them into tracepb.Span
 	for _, zspan := range zipkinSpans {
-		span, node, err := zipkinSpanToTraceSpan(zspan)
-		// TODO:(@odeke-em) record errors
-		if err == nil && span != nil {
-			key := node.String()
-			if _, alreadyAdded := byNodeGrouping[key]; !alreadyAdded {
-				uniqueNodes = append(uniqueNodes, node)
-			}
-			byNodeGrouping[key] = append(byNodeGrouping[key], span)
+		if zspan == nil {
+			continue
 		}
+		span, node := zipkinSpanToTraceSpan(zspan)
+		key := node.String()
+		if _, alreadyAdded := byNodeGrouping[key]; !alreadyAdded {
+			uniqueNodes = append(uniqueNodes, node)
+		}
+		byNodeGrouping[key] = append(byNodeGrouping[key], span)
 	}
 
 	for _, node := range uniqueNodes {
@@ -243,8 +243,8 @@ func (zr *ZipkinReceiver) deserializeFromJSON(jsonBlob []byte, debugWasSet bool)
 // Shutdown tells the receiver that should stop reception,
 // giving it a chance to perform any necessary clean-up and shutting down
 // its HTTP server.
-func (zr *ZipkinReceiver) Shutdown() error {
-	var err = oterr.ErrAlreadyStopped
+func (zr *ZipkinReceiver) Shutdown(context.Context) error {
+	var err = componenterror.ErrAlreadyStopped
 	zr.stopOnce.Do(func() {
 		err = zr.server.Close()
 	})
@@ -365,50 +365,16 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-var (
-	errNilZipkinSpan = errors.New("non-nil Zipkin span expected")
-	errZeroTraceID   = errors.New("trace id is zero")
-	errZeroID        = errors.New("id is zero")
-)
-
-func zTraceIDToOCProtoTraceID(zTraceID zipkinmodel.TraceID) ([]byte, error) {
-	if zTraceID.High == 0 && zTraceID.Low == 0 {
-		return nil, errZeroTraceID
-	}
-	return tracetranslator.UInt64ToByteTraceID(zTraceID.High, zTraceID.Low), nil
-}
-
-func zSpanIDToOCProtoSpanID(id zipkinmodel.ID) ([]byte, error) {
-	if id == 0 {
-		return nil, errZeroID
-	}
-	return tracetranslator.UInt64ToByteSpanID(uint64(id)), nil
-}
-
-func zipkinSpanToTraceSpan(zs *zipkinmodel.SpanModel) (*tracepb.Span, *commonpb.Node, error) {
-	if zs == nil {
-		return nil, nil, errNilZipkinSpan
-	}
-
-	traceID, err := zTraceIDToOCProtoTraceID(zs.TraceID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("TraceID: %v", err)
-	}
-	spanID, err := zSpanIDToOCProtoSpanID(zs.ID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("SpanID: %v", err)
-	}
+func zipkinSpanToTraceSpan(zs *zipkinmodel.SpanModel) (*tracepb.Span, *commonpb.Node) {
+	traceID := tracetranslator.UInt64ToByteTraceID(zs.TraceID.High, zs.TraceID.Low)
 	var parentSpanID []byte
 	if zs.ParentID != nil {
-		parentSpanID, err = zSpanIDToOCProtoSpanID(*zs.ParentID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("ParentSpanID: %v", err)
-		}
+		parentSpanID = tracetranslator.UInt64ToByteSpanID(uint64(*zs.ParentID))
 	}
 
 	pbs := &tracepb.Span{
 		TraceId:      traceID,
-		SpanId:       spanID,
+		SpanId:       tracetranslator.UInt64ToByteSpanID(uint64(zs.ID)),
 		ParentSpanId: parentSpanID,
 		Name:         &tracepb.TruncatableString{Value: zs.Name},
 		StartTime:    internal.TimeToTimestamp(zs.Timestamp),
@@ -421,7 +387,7 @@ func zipkinSpanToTraceSpan(zs *zipkinmodel.SpanModel) (*tracepb.Span, *commonpb.
 
 	node := nodeFromZipkinEndpoints(zs, pbs)
 
-	return pbs, node, nil
+	return pbs, node
 }
 
 func nodeFromZipkinEndpoints(zs *zipkinmodel.SpanModel, pbs *tracepb.Span) *commonpb.Node {

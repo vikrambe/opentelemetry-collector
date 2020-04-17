@@ -21,8 +21,7 @@ import (
 
 	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
-	"github.com/google/go-cmp/cmp"
-	model "github.com/jaegertracing/jaeger/model"
+	"github.com/jaegertracing/jaeger/model"
 	"github.com/stretchr/testify/assert"
 	"go.opencensus.io/trace"
 
@@ -43,9 +42,7 @@ func TestOpenCensusToJaeger(t *testing.T) {
 
 	oc := expectedTraceData(now, nowPlus10min, nowPlus10min2sec)
 
-	if diff := cmp.Diff(jaeger, oc); diff != "" {
-		t.Errorf("Mismatched responses\n-Got +Want:\n\t%s", diff)
-	}
+	assert.EqualValues(t, oc, jaeger)
 }
 
 func expectedTraceData(t1, t2, t3 time.Time) consumerdata.TraceData {
@@ -164,6 +161,29 @@ func expectedTraceData(t1, t2, t3 time.Time) consumerdata.TraceData {
 					},
 				},
 			},
+			{
+				TraceId:   traceID,
+				SpanId:    parentSpanID,
+				Name:      &tracepb.TruncatableString{Value: "ProxyFetch"},
+				StartTime: internal.TimeToTimestamp(t2),
+				EndTime:   internal.TimeToTimestamp(t3),
+				Kind:      tracepb.Span_CLIENT,
+				Status: &tracepb.Status{
+					Code: trace.StatusCodeUnknown,
+				},
+				Attributes: &tracepb.Span_Attributes{
+					AttributeMap: map[string]*tracepb.AttributeValue{
+						"error": {
+							Value: &tracepb.AttributeValue_BoolValue{BoolValue: true},
+						},
+						"span.kind": {
+							Value: &tracepb.AttributeValue_StringValue{
+								StringValue: &tracepb.TruncatableString{Value: "client"},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -229,7 +249,18 @@ func grpcFixture(t1 time.Time, d1, d2 time.Duration) model.Batch {
 					model.String(tracetranslator.TagStatusMsg, "Frontend crash"),
 					model.Int64(tracetranslator.TagStatusCode, trace.StatusCodeInternal),
 					model.String(tracetranslator.TagHTTPStatusMsg, "Internal server error"),
-					model.Int64("http.status_code", 500),
+					model.Int64(tracetranslator.TagHTTPStatusCode, 500),
+					model.Bool("error", true),
+					model.String("span.kind", "client"),
+				},
+			},
+			{
+				TraceID:       traceID,
+				SpanID:        parentSpanID,
+				OperationName: "ProxyFetch",
+				StartTime:     t1.Add(d1),
+				Duration:      d2,
+				Tags: []model.KeyValue{
 					model.Bool("error", true),
 					model.String("span.kind", "client"),
 				},

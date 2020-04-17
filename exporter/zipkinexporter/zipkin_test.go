@@ -16,6 +16,7 @@ package zipkinexporter
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -31,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/processor"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/zipkinreceiver"
@@ -76,9 +77,8 @@ func TestZipkinExporter_roundtripJSON(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, zi)
 
-	mh := component.NewMockHost()
-	require.NoError(t, zi.Start(mh))
-	defer zi.Shutdown()
+	require.NoError(t, zi.Start(context.Background(), componenttest.NewNopHost()))
+	defer zi.Shutdown(context.Background())
 
 	// Let the receiver receive "uploaded Zipkin spans from a Java client application"
 	req, _ := http.NewRequest("POST", "https://tld.org/", strings.NewReader(zipkinSpansJSONJavaLibrary))
@@ -306,10 +306,9 @@ func TestZipkinExporter_roundtripProto(t *testing.T) {
 		"zipkin_receiver", fmt.Sprintf(":%d", port), zexp)
 	require.NoError(t, err)
 
-	mh := component.NewMockHost()
-	err = zi.Start(mh)
+	err = zi.Start(context.Background(), componenttest.NewNopHost())
 	require.NoError(t, err)
-	defer zi.Shutdown()
+	defer zi.Shutdown(context.Background())
 
 	// Let the receiver receive "uploaded Zipkin spans from a Java client application"
 	req, _ := http.NewRequest("POST", "https://tld.org/", strings.NewReader(zipkinSpansJSONJavaLibrary))

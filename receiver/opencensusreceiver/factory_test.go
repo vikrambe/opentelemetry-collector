@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
@@ -107,17 +107,16 @@ func TestCreateTraceReceiver(t *testing.T) {
 	logger := zap.NewNop()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink := new(exportertest.SinkTraceExporter)
+			sink := new(exportertest.SinkTraceExporterOld)
 			tr, err := factory.CreateTraceReceiver(ctx, logger, tt.cfg, sink)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("factory.CreateTraceReceiver() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tr != nil {
-				mh := component.NewMockHost()
-				err := tr.Start(mh)
+				err := tr.Start(context.Background(), componenttest.NewNopHost())
 				require.NoError(t, err, "Start() error = %v", err)
-				tr.Shutdown()
+				tr.Shutdown(context.Background())
 			}
 		})
 	}
@@ -181,17 +180,16 @@ func TestCreateMetricReceiver(t *testing.T) {
 	logger := zap.NewNop()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink := new(exportertest.SinkMetricsExporter)
+			sink := new(exportertest.SinkMetricsExporterOld)
 			tc, err := factory.CreateMetricsReceiver(logger, tt.cfg, sink)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("factory.CreateMetricsReceiver() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tc != nil {
-				mh := component.NewMockHost()
-				err := tc.Start(mh)
+				err := tc.Start(context.Background(), componenttest.NewNopHost())
 				require.NoError(t, err, "Start() error = %v", err)
-				tc.Shutdown()
+				tc.Shutdown(context.Background())
 			}
 		})
 	}

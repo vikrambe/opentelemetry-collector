@@ -14,7 +14,11 @@
 
 package component
 
-import "context"
+import (
+	"context"
+
+	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+)
 
 // Component is either a receiver, exporter, processor or extension.
 type Component interface {
@@ -23,11 +27,22 @@ type Component interface {
 	// Start() then the collector startup will be aborted.
 	// If this is an exporter component it may prepare for exporting
 	// by connecting to the endpoint.
-	Start(host Host) error
+	Start(ctx context.Context, host Host) error
 
 	// Shutdown is invoked during service shutdown.
-	Shutdown() error
+	Shutdown(ctx context.Context) error
 }
+
+// Kind specified one of the 4 components kinds, see consts below.
+type Kind int
+
+const (
+	_ Kind = iota // skip 0, start types from 1.
+	KindReceiver
+	KindProcessor
+	KindExporter
+	KindExtension
+)
 
 // Host represents the entity that is hosting a Component. It is used to allow communication
 // between the Component and its host (normally the service.Application is the host).
@@ -37,9 +52,23 @@ type Host interface {
 	// from) after its start function had already returned.
 	ReportFatalError(err error)
 
-	// Context returns a context provided by the host to be used on the component
-	// operations.
-	Context() context.Context
+	// GetFactory of the specified kind. Returns the factory for a component type.
+	// This allows components to create other components. For example:
+	//   func (r MyReceiver) Start(host component.Host) error {
+	//     apacheFactory := host.GetFactory(KindReceiver,"apache").(component.ReceiverFactory)
+	//     receiver, err := apacheFactory.CreateMetricsReceiver(...)
+	//     ...
+	//   }
+	// GetFactory can be called by the component anytime after Start() begins and
+	// until Shutdown() is called. Note that the component is responsible for destroying
+	// other components that it creates.
+	GetFactory(kind Kind, componentType string) Factory
+
+	// Return map of extensions. Only enabled and created extensions will be returned.
+	// Typically is used to find an extension by type or by full config name. Both cases
+	// can be done by iterating the returned map. There are typically very few extensions
+	// so there there is no performance implications due to iteration.
+	GetExtensions() map[configmodels.Extension]ServiceExtension
 }
 
 // Factory interface must be implemented by all component factories.

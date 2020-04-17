@@ -20,12 +20,10 @@ import (
 	collectortrace "github.com/open-telemetry/opentelemetry-proto/gen/go/collector/trace/v1"
 
 	"github.com/open-telemetry/opentelemetry-collector/client"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
-	"github.com/open-telemetry/opentelemetry-collector/translator/internaldata"
 )
 
 const (
@@ -35,13 +33,13 @@ const (
 // Receiver is the type used to handle spans from OpenTelemetry exporters.
 type Receiver struct {
 	instanceName string
-	nextConsumer consumer.TraceConsumerOld
+	nextConsumer consumer.TraceConsumer
 }
 
 // New creates a new Receiver reference.
-func New(instanceName string, nextConsumer consumer.TraceConsumerOld) (*Receiver, error) {
+func New(instanceName string, nextConsumer consumer.TraceConsumer) (*Receiver, error) {
 	if nextConsumer == nil {
-		return nil, oterr.ErrNilNextConsumer
+		return nil, componenterror.ErrNilNextConsumer
 	}
 
 	r := &Receiver{
@@ -61,26 +59,16 @@ func (r *Receiver) Export(ctx context.Context, req *collectortrace.ExportTraceSe
 	// We need to ensure that it propagates the receiver name as a tag
 	ctxWithReceiverName := obsreport.ReceiverContext(ctx, r.instanceName, receiverTransport, receiverTagValue)
 
-	td := data.TraceDataFromOtlp(req.ResourceSpans)
-	rss := td.ResourceSpans()
-	for i := 0; i < rss.Len(); i++ {
-		rs := rss.Get(i)
-
-		if rs.InstrumentationLibrarySpans().Len() == 0 {
-			continue
-		}
-
-		octd := internaldata.ResourceSpansToOC(rs)
-		err := r.sendToNextConsumer(ctxWithReceiverName, &octd)
-		if err != nil {
-			return nil, err
-		}
+	td := pdata.TracesFromOtlp(req.ResourceSpans)
+	err := r.sendToNextConsumer(ctxWithReceiverName, td)
+	if err != nil {
+		return nil, err
 	}
 
 	return &collectortrace.ExportTraceServiceResponse{}, nil
 }
 
-func (r *Receiver) sendToNextConsumer(ctx context.Context, td *consumerdata.TraceData) error {
+func (r *Receiver) sendToNextConsumer(ctx context.Context, td pdata.Traces) error {
 	if c, ok := client.FromGRPC(ctx); ok {
 		ctx = client.NewContext(ctx, c)
 	}
@@ -91,10 +79,9 @@ func (r *Receiver) sendToNextConsumer(ctx context.Context, td *consumerdata.Trac
 		receiverTransport)
 
 	var consumerErr error
-	numSpans := 0
-	if td != nil && len(td.Spans) != 0 {
-		numSpans = len(td.Spans)
-		consumerErr = r.nextConsumer.ConsumeTraceData(ctx, *td)
+	numSpans := td.SpanCount()
+	if numSpans != 0 {
+		consumerErr = r.nextConsumer.ConsumeTraces(ctx, td)
 	}
 
 	obsreport.EndTraceDataReceiveOp(ctx, dataFormatProtobuf, numSpans, consumerErr)

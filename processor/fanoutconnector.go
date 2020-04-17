@@ -17,10 +17,11 @@ package processor
 import (
 	"context"
 
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/converter"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 )
 
 // This file contains implementations of Trace/Metrics connectors
@@ -40,7 +41,7 @@ func CreateMetricsFanOutConnector(mcs []consumer.MetricsConsumerBase) consumer.M
 		} else {
 			metricsConsumerOld := mc.(consumer.MetricsConsumerOld)
 			metricsConsumersOld = append(metricsConsumersOld, metricsConsumerOld)
-			metricsConsumers = append(metricsConsumers, consumer.NewInternalToOCMetricsConverter(metricsConsumerOld))
+			metricsConsumers = append(metricsConsumers, converter.NewInternalToOCMetricsConverter(metricsConsumerOld))
 		}
 	}
 
@@ -67,7 +68,7 @@ func (mfc metricsFanOutConnectorOld) ConsumeMetricsData(ctx context.Context, md 
 			errs = append(errs, err)
 		}
 	}
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
 // NewMetricsFanOutConnector wraps multiple new type metrics consumers in a single one.
@@ -80,14 +81,14 @@ type metricsFanOutConnector []consumer.MetricsConsumer
 var _ consumer.MetricsConsumer = (*metricsFanOutConnector)(nil)
 
 // ConsumeMetricsData exports the MetricsData to all consumers wrapped by the current one.
-func (mfc metricsFanOutConnector) ConsumeMetrics(ctx context.Context, md data.MetricData) error {
+func (mfc metricsFanOutConnector) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
 	var errs []error
 	for _, mc := range mfc {
 		if err := mc.ConsumeMetrics(ctx, md); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
 // CreateTraceFanOutConnector wraps multiple trace consumers in a single one.
@@ -104,7 +105,7 @@ func CreateTraceFanOutConnector(tcs []consumer.TraceConsumerBase) consumer.Trace
 		} else {
 			traceConsumerOld := tc.(consumer.TraceConsumerOld)
 			traceConsumersOld = append(traceConsumersOld, traceConsumerOld)
-			traceConsumers = append(traceConsumers, consumer.NewInternalToOCTraceConverter(traceConsumerOld))
+			traceConsumers = append(traceConsumers, converter.NewInternalToOCTraceConverter(traceConsumerOld))
 		}
 	}
 
@@ -131,7 +132,7 @@ func (tfc traceFanOutConnectorOld) ConsumeTraceData(ctx context.Context, td cons
 			errs = append(errs, err)
 		}
 	}
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
 // NewTraceFanOutConnector wraps multiple new type trace consumers in a single one.
@@ -143,13 +144,13 @@ type traceFanOutConnector []consumer.TraceConsumer
 
 var _ consumer.TraceConsumer = (*traceFanOutConnector)(nil)
 
-// ConsumeTrace exports the span data to all trace consumers wrapped by the current one.
-func (tfc traceFanOutConnector) ConsumeTrace(ctx context.Context, td data.TraceData) error {
+// ConsumeTraces exports the span data to all trace consumers wrapped by the current one.
+func (tfc traceFanOutConnector) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
 	var errs []error
 	for _, tc := range tfc {
-		if err := tc.ConsumeTrace(ctx, td); err != nil {
+		if err := tc.ConsumeTraces(ctx, td); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }

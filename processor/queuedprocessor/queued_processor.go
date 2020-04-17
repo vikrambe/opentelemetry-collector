@@ -54,34 +54,24 @@ type queueItem struct {
 	ctx        context.Context
 }
 
-// NewQueuedSpanProcessor returns a span processor that maintains a bounded
-// in-memory queue of span batches, and sends out span batches using the
-// provided sender
-func NewQueuedSpanProcessor(sender consumer.TraceConsumerOld, opts ...Option) component.TraceProcessorOld {
-	opt := Options.apply(opts...)
-	sp := newQueuedSpanProcessor(sender, opt)
-
-	return sp
-}
-
-func newQueuedSpanProcessor(sender consumer.TraceConsumerOld, opts options) *queuedSpanProcessor {
-	boundedQueue := queue.NewBoundedQueue(opts.queueSize, func(item interface{}) {})
+func newQueuedSpanProcessor(logger *zap.Logger, sender consumer.TraceConsumerOld, cfg *Config) *queuedSpanProcessor {
+	boundedQueue := queue.NewBoundedQueue(cfg.QueueSize, func(item interface{}) {})
 	return &queuedSpanProcessor{
-		name:                     opts.name,
+		name:                     cfg.Name(),
 		queue:                    boundedQueue,
-		logger:                   opts.logger,
-		numWorkers:               opts.numWorkers,
+		logger:                   logger,
+		numWorkers:               cfg.NumWorkers,
 		sender:                   sender,
-		retryOnProcessingFailure: opts.retryOnProcessingFailure,
-		backoffDelay:             opts.backoffDelay,
+		retryOnProcessingFailure: cfg.RetryOnFailure,
+		backoffDelay:             cfg.BackoffDelay,
 		stopCh:                   make(chan struct{}),
 	}
 }
 
 // Start is invoked during service startup.
-func (sp *queuedSpanProcessor) Start(host component.Host) error {
+func (sp *queuedSpanProcessor) Start(_ context.Context, _ component.Host) error {
 	// emit 0's so that the metric is present and reported, rather than absent
-	ctx := obsreport.ProcessorContext(host.Context(), sp.name)
+	ctx := obsreport.ProcessorContext(context.Background(), sp.name)
 	stats.Record(
 		ctx,
 		processor.StatTraceBatchesDroppedCount.M(int64(0)),
@@ -127,7 +117,7 @@ func (sp *queuedSpanProcessor) ConsumeTraceData(ctx context.Context, td consumer
 		ctx:        ctx,
 	}
 
-	statsTags := processor.StatsTagsForBatch(sp.name, processor.ServiceNameForNode(td.Node), td.SourceFormat)
+	statsTags := []tag.Mutator{tag.Insert(processor.TagProcessorNameKey, sp.name)}
 	numSpans := len(td.Spans)
 	stats.RecordWithTags(ctx, statsTags, processor.StatReceivedSpanCount.M(int64(numSpans)))
 
@@ -139,7 +129,7 @@ func (sp *queuedSpanProcessor) ConsumeTraceData(ctx context.Context, td consumer
 		// record this as "refused" instead of "dropped".
 		sp.onItemDropped(item, statsTags)
 	} else {
-		obsreport.ProcessorTraceDataAccepted(ctx, td)
+		obsreport.ProcessorTraceDataAccepted(ctx, len(td.Spans))
 	}
 	return nil
 }
@@ -149,7 +139,7 @@ func (sp *queuedSpanProcessor) GetCapabilities() component.ProcessorCapabilities
 }
 
 // Shutdown is invoked during service shutdown.
-func (sp *queuedSpanProcessor) Shutdown() error {
+func (sp *queuedSpanProcessor) Shutdown(context.Context) error {
 	// TODO: flush the queue.
 	return nil
 }
@@ -157,7 +147,7 @@ func (sp *queuedSpanProcessor) Shutdown() error {
 func (sp *queuedSpanProcessor) processItemFromQueue(item *queueItem) {
 	startTime := time.Now()
 	err := sp.sender.ConsumeTraceData(item.ctx, item.td)
-	statsTags := processor.StatsTagsForBatch(sp.name, processor.ServiceNameForNode(item.td.Node), item.td.SourceFormat)
+	statsTags := []tag.Mutator{tag.Insert(processor.TagProcessorNameKey, sp.name)}
 	if err == nil {
 		// Record latency metrics and return
 		sendLatencyMs := int64(time.Since(startTime) / time.Millisecond)
@@ -230,7 +220,7 @@ func (sp *queuedSpanProcessor) onItemDropped(item *queueItem, statsTags []tag.Mu
 	numSpans := len(item.td.Spans)
 	stats.RecordWithTags(item.ctx, statsTags, processor.StatDroppedSpanCount.M(int64(numSpans)), processor.StatTraceBatchesDroppedCount.M(int64(1)))
 
-	obsreport.ProcessorTraceDataDropped(item.ctx, item.td)
+	obsreport.ProcessorTraceDataDropped(item.ctx, len(item.td.Spans))
 
 	sp.logger.Warn("Span batch dropped",
 		zap.String("processor", sp.name),

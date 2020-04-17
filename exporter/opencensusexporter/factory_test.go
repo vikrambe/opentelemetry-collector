@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/compression"
 	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
 	"github.com/open-telemetry/opentelemetry-collector/config/configgrpc"
@@ -63,11 +63,11 @@ func TestCreateTraceExporter(t *testing.T) {
 		context.Background(),
 		zap.NewNop(),
 		rcvCfg,
-		new(exportertest.SinkTraceExporter))
+		new(exportertest.SinkTraceExporterOld))
 	require.NotNil(t, rcv)
 	require.Nil(t, err)
-	require.Nil(t, rcv.Start(component.NewMockHost()))
-	defer rcv.Shutdown()
+	require.Nil(t, rcv.Start(context.Background(), componenttest.NewNopHost()))
+	defer rcv.Shutdown(context.Background())
 
 	tests := []struct {
 		name     string
@@ -186,7 +186,7 @@ func TestCreateTraceExporter(t *testing.T) {
 				assert.Nil(t, err)
 				assert.NotNil(t, consumer)
 
-				err = consumer.Shutdown()
+				err = consumer.Shutdown(context.Background())
 				if err != nil {
 					// Since the endpoint of opencensus exporter doesn't actually exist,
 					// exporter may already stop because it cannot connect.

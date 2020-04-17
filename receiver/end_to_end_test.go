@@ -25,6 +25,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/converter"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/loggingexporter"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/opencensusreceiver"
 )
@@ -38,7 +39,7 @@ func Example_endToEnd() {
 		log.Fatalf("Failed to create logging exporter: %v", err)
 	}
 
-	tr, err := opencensusreceiver.New("opencensus", "tcp", "localhost:55678", lte, nil)
+	tr, err := opencensusreceiver.New("opencensus", "tcp", "localhost:55678", converter.NewOCToInternalTraceConverter(lte), nil)
 	if err != nil {
 		log.Fatalf("Failed to create trace receiver: %v", err)
 	}
@@ -49,7 +50,7 @@ func Example_endToEnd() {
 	// Once we have the span receiver which will connect to the
 	// various exporter pipeline i.e. *tracepb.Span->OpenCensus.SpanData
 	for _, tr := range trl {
-		if err = tr.Start(nil); err != nil {
+		if err = tr.Start(context.Background(), nil); err != nil {
 			log.Fatalf("Failed to start trace receiver: %v", err)
 		}
 	}
@@ -57,7 +58,7 @@ func Example_endToEnd() {
 	// Before exiting, stop all the trace receivers
 	defer func() {
 		for _, tr := range trl {
-			_ = tr.Shutdown()
+			_ = tr.Shutdown(context.Background())
 		}
 	}()
 	log.Println("Done starting the trace receiver")

@@ -25,7 +25,6 @@ import (
 	"contrib.go.opencensus.io/exporter/jaeger"
 	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
-	"github.com/google/go-cmp/cmp"
 	"github.com/jaegertracing/jaeger/proto-gen/api_v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +32,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
 	"github.com/open-telemetry/opentelemetry-collector/internal"
@@ -59,11 +58,10 @@ func TestJaegerAgentUDP_ThriftCompact_InvalidPort(t *testing.T) {
 	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
 	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
 
-	mh := component.NewMockHost()
-	err = jr.Start(mh)
+	err = jr.Start(context.Background(), componenttest.NewNopHost())
 	assert.Error(t, err, "should not have been able to startTraceReception")
 
-	jr.Shutdown()
+	jr.Shutdown(context.Background())
 }
 
 func TestJaegerAgentUDP_ThriftBinary_6832(t *testing.T) {
@@ -86,10 +84,9 @@ func TestJaegerAgentUDP_ThriftBinary_PortInUse(t *testing.T) {
 	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
 	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
 
-	mh := component.NewMockHost()
-	err = jr.(*jReceiver).startAgent(mh)
+	err = jr.(*jReceiver).startAgent(componenttest.NewNopHost())
 	assert.NoError(t, err, "Start failed")
-	defer jr.Shutdown()
+	defer jr.Shutdown(context.Background())
 
 	l, err := net.Listen("udp", fmt.Sprintf("localhost:%d", port))
 	assert.Error(t, err, "should not have been able to listen to the port")
@@ -108,11 +105,10 @@ func TestJaegerAgentUDP_ThriftBinary_InvalidPort(t *testing.T) {
 	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
 	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
 
-	mh := component.NewMockHost()
-	err = jr.Start(mh)
+	err = jr.Start(context.Background(), componenttest.NewNopHost())
 	assert.Error(t, err, "should not have been able to startTraceReception")
 
-	jr.Shutdown()
+	jr.Shutdown(context.Background())
 }
 
 func initializeGRPCTestServer(t *testing.T, beforeServe func(server *grpc.Server)) (*grpc.Server, net.Addr) {
@@ -147,10 +143,9 @@ func TestJaegerHTTP(t *testing.T) {
 	}
 	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
 	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
-	defer jr.Shutdown()
+	defer jr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = jr.Start(mh)
+	err = jr.Start(context.Background(), componenttest.NewNopHost())
 	assert.NoError(t, err, "Start failed")
 
 	// allow http server to start
@@ -181,13 +176,12 @@ func TestJaegerHTTP(t *testing.T) {
 
 func testJaegerAgent(t *testing.T, agentEndpoint string, receiverConfig *Configuration) {
 	// 1. Create the Jaeger receiver aka "server"
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(exportertest.SinkTraceExporterOld)
 	jr, err := New(jaegerAgent, receiverConfig, sink, zap.NewNop())
 	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
-	defer jr.Shutdown()
+	defer jr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = jr.Start(mh)
+	err = jr.Start(context.Background(), componenttest.NewNopHost())
 	assert.NoError(t, err, "Start failed")
 
 	now := time.Unix(1542158650, 536343000).UTC()
@@ -348,7 +342,5 @@ func testJaegerAgent(t *testing.T, agentEndpoint string, receiverConfig *Configu
 		},
 	}
 
-	if diff := cmp.Diff(got, want); diff != "" {
-		t.Errorf("Mismatched responses\n-Got +Want:\n\t%s", diff)
-	}
+	assert.EqualValues(t, want, got)
 }

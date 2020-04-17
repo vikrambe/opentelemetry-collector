@@ -22,7 +22,6 @@ var commonFile = &File{
 	testImports: []string{
 		`"testing"`,
 		``,
-		`otlpcommon "github.com/open-telemetry/opentelemetry-proto/gen/go/common/v1"`,
 		`"github.com/stretchr/testify/assert"`,
 	},
 	structs: []baseStruct{
@@ -98,10 +97,9 @@ var endTimeField = &primitiveTypedField{
 }
 
 var attributes = &sliceField{
-	fieldMame:               "Attributes",
-	originFieldName:         "Attributes",
-	returnSlice:             attributeMap,
-	constructorDefaultValue: "nil",
+	fieldMame:       "Attributes",
+	originFieldName: "Attributes",
+	returnSlice:     attributeMap,
 }
 
 var nameField = &primitiveField{

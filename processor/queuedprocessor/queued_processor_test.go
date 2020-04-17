@@ -27,8 +27,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opencensus.io/stats/view"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumererror"
@@ -46,16 +48,14 @@ func TestQueuedProcessor_noEnqueueOnPermanentError(t *testing.T) {
 		consumeTraceDataError: consumererror.Permanent(errors.New("bad data")),
 	}
 
-	qp := NewQueuedSpanProcessor(
-		c,
-		Options.WithRetryOnProcessingFailures(true),
-		Options.WithBackoffDelay(time.Hour),
-		Options.WithNumWorkers(1),
-		Options.WithQueueSize(2),
-	).(*queuedSpanProcessor)
+	cfg := generateDefaultConfig()
+	cfg.NumWorkers = 1
+	cfg.QueueSize = 2
+	cfg.RetryOnFailure = true
+	cfg.BackoffDelay = time.Hour
+	qp := newQueuedSpanProcessor(zap.NewNop(), c, cfg)
 
-	mh := component.MockHost{}
-	require.NoError(t, qp.Start(&mh))
+	require.NoError(t, qp.Start(context.Background(), componenttest.NewNopHost()))
 	c.Add(1)
 	require.Nil(t, qp.ConsumeTraceData(ctx, td))
 	c.Wait()
@@ -80,7 +80,7 @@ type waitGroupTraceConsumer struct {
 
 var _ consumer.TraceConsumerOld = (*waitGroupTraceConsumer)(nil)
 
-func (c *waitGroupTraceConsumer) ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error {
+func (c *waitGroupTraceConsumer) ConsumeTraceData(_ context.Context, _ consumerdata.TraceData) error {
 	defer c.Done()
 	return c.consumeTraceDataError
 }
@@ -104,9 +104,8 @@ func TestQueueProcessorHappyPath(t *testing.T) {
 	defer view.Unregister(views...)
 
 	mockProc := newMockConcurrentSpanProcessor()
-	qp := NewQueuedSpanProcessor(mockProc)
-	mockHost := component.MockHost{}
-	require.NoError(t, qp.Start(&mockHost))
+	qp := newQueuedSpanProcessor(zap.NewNop(), mockProc, generateDefaultConfig())
+	require.NoError(t, qp.Start(context.Background(), componenttest.NewNopHost()))
 	goFn := func(td consumerdata.TraceData) {
 		qp.ConsumeTraceData(context.Background(), td)
 	}
@@ -152,7 +151,7 @@ type mockConcurrentSpanProcessor struct {
 
 var _ consumer.TraceConsumerOld = (*mockConcurrentSpanProcessor)(nil)
 
-func (p *mockConcurrentSpanProcessor) ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error {
+func (p *mockConcurrentSpanProcessor) ConsumeTraceData(_ context.Context, td consumerdata.TraceData) error {
 	atomic.AddInt32(&p.batchCount, 1)
 	atomic.AddInt32(&p.spanCount, int32(len(td.Spans)))
 	p.waitGroup.Done()

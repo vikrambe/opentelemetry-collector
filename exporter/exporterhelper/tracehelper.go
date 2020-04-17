@@ -20,7 +20,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector/component"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/obsreport"
 )
 
@@ -30,7 +30,7 @@ type traceDataPusherOld func(ctx context.Context, td consumerdata.TraceData) (dr
 
 // traceDataPusher is a helper function that is similar to ConsumeTraceData but also
 // returns the number of dropped spans.
-type traceDataPusher func(ctx context.Context, td data.TraceData) (droppedSpans int, err error)
+type traceDataPusher func(ctx context.Context, td pdata.Traces) (droppedSpans int, err error)
 
 // traceExporterOld implements the exporter with additional helper options.
 type traceExporterOld struct {
@@ -39,7 +39,7 @@ type traceExporterOld struct {
 	shutdown         Shutdown
 }
 
-func (te *traceExporterOld) Start(host component.Host) error {
+func (te *traceExporterOld) Start(_ context.Context, _ component.Host) error {
 	return nil
 }
 
@@ -50,8 +50,8 @@ func (te *traceExporterOld) ConsumeTraceData(ctx context.Context, td consumerdat
 }
 
 // Shutdown stops the exporter and is invoked during shutdown.
-func (te *traceExporterOld) Shutdown() error {
-	return te.shutdown()
+func (te *traceExporterOld) Shutdown(ctx context.Context) error {
+	return te.shutdown(ctx)
 }
 
 // NewTraceExporterOld creates an TraceExporterOld that can record metrics and can wrap every
@@ -77,9 +77,7 @@ func NewTraceExporterOld(
 
 	// The default shutdown function does nothing.
 	if opts.shutdown == nil {
-		opts.shutdown = func() error {
-			return nil
-		}
+		opts.shutdown = func(context.Context) error { return nil }
 	}
 
 	return &traceExporterOld{
@@ -112,13 +110,13 @@ type traceExporter struct {
 	shutdown         Shutdown
 }
 
-func (te *traceExporter) Start(host component.Host) error {
+func (te *traceExporter) Start(_ context.Context, _ component.Host) error {
 	return nil
 }
 
-func (te *traceExporter) ConsumeTrace(
+func (te *traceExporter) ConsumeTraces(
 	ctx context.Context,
-	td data.TraceData,
+	td pdata.Traces,
 ) error {
 	exporterCtx := obsreport.ExporterContext(ctx, te.exporterFullName)
 	_, err := te.dataPusher(exporterCtx, td)
@@ -126,8 +124,8 @@ func (te *traceExporter) ConsumeTrace(
 }
 
 // Shutdown stops the exporter and is invoked during shutdown.
-func (te *traceExporter) Shutdown() error {
-	return te.shutdown()
+func (te *traceExporter) Shutdown(ctx context.Context) error {
+	return te.shutdown(ctx)
 }
 
 // NewTraceExporter creates a TraceExporter that can record metrics and can wrap
@@ -152,9 +150,7 @@ func NewTraceExporter(
 
 	// The default shutdown function does nothing.
 	if opts.shutdown == nil {
-		opts.shutdown = func() error {
-			return nil
-		}
+		opts.shutdown = func(context.Context) error { return nil }
 	}
 
 	return &traceExporter{
@@ -167,7 +163,7 @@ func NewTraceExporter(
 // withObservability wraps the current pusher into a function that records
 // the observability signals during the pusher execution.
 func (p traceDataPusher) withObservability(exporterName string) traceDataPusher {
-	return func(ctx context.Context, td data.TraceData) (int, error) {
+	return func(ctx context.Context, td pdata.Traces) (int, error) {
 		ctx = obsreport.StartTraceDataExportOp(ctx, exporterName)
 		// Forward the data to the next consumer (this pusher is the next).
 		droppedSpans, err := p(ctx, td)

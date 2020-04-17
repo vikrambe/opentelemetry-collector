@@ -129,13 +129,13 @@ type ExampleReceiverProducer struct {
 }
 
 // Start tells the receiver to start its processing.
-func (erp *ExampleReceiverProducer) Start(host component.Host) error {
+func (erp *ExampleReceiverProducer) Start(ctx context.Context, host component.Host) error {
 	erp.Started = true
 	return nil
 }
 
 // Shutdown tells the receiver that should stop reception,
-func (erp *ExampleReceiverProducer) Shutdown() error {
+func (erp *ExampleReceiverProducer) Shutdown(context.Context) error {
 	erp.Stopped = true
 	return nil
 }
@@ -255,7 +255,6 @@ type ExampleExporter struct {
 	ExtraSetting                  string                   `mapstructure:"extra"`
 	ExtraMapSetting               map[string]string        `mapstructure:"extra_map"`
 	ExtraListSetting              []string                 `mapstructure:"extra_list"`
-	ExporterShutdown              bool
 }
 
 // ExampleExporterFactory is factory for ExampleExporter.
@@ -270,7 +269,7 @@ func (f *ExampleExporterFactory) Type() string {
 // CreateDefaultConfig creates the default configuration for the Exporter.
 func (f *ExampleExporterFactory) CreateDefaultConfig() configmodels.Exporter {
 	return &ExampleExporter{
-		ExporterSettings: configmodels.ExporterSettings{},
+		ExporterSettings: configmodels.ExporterSettings{TypeVal: f.Type()},
 		ExtraSetting:     "some export string",
 		ExtraMapSetting:  nil,
 		ExtraListSetting: nil,
@@ -298,7 +297,7 @@ type ExampleExporterConsumer struct {
 // Start tells the exporter to start. The exporter may prepare for exporting
 // by connecting to the endpoint. Host parameter can be used for communicating
 // with the host after Start() has already returned.
-func (exp *ExampleExporterConsumer) Start(host component.Host) error {
+func (exp *ExampleExporterConsumer) Start(ctx context.Context, host component.Host) error {
 	exp.ExporterStarted = true
 	return nil
 }
@@ -321,7 +320,7 @@ func (exp *ExampleExporterConsumer) Name() string {
 }
 
 // Shutdown is invoked during shutdown.
-func (exp *ExampleExporterConsumer) Shutdown() error {
+func (exp *ExampleExporterConsumer) Shutdown(context.Context) error {
 	exp.ExporterShutdown = true
 	return nil
 }
@@ -372,17 +371,25 @@ func (f *ExampleProcessorFactory) CreateMetricsProcessor(
 	return nil, configerror.ErrDataTypeIsNotSupported
 }
 
-// ExampleExtension is for testing purposes. We are defining an example config and factory
+// ExampleExtensionCfg is for testing purposes. We are defining an example config and factory
 // for "exampleextension" extension type.
-type ExampleExtension struct {
+type ExampleExtensionCfg struct {
 	configmodels.ExtensionSettings `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct
 	ExtraSetting                   string                   `mapstructure:"extra"`
 	ExtraMapSetting                map[string]string        `mapstructure:"extra_map"`
 	ExtraListSetting               []string                 `mapstructure:"extra_list"`
 }
 
-// ExampleExtensionFactory is factory for ExampleExtension.
+type ExampleExtension struct {
+}
+
+func (e *ExampleExtension) Start(ctx context.Context, host component.Host) error { return nil }
+
+func (e *ExampleExtension) Shutdown(ctx context.Context) error { return nil }
+
+// ExampleExtensionFactory is factory for ExampleExtensionCfg.
 type ExampleExtensionFactory struct {
+	FailCreation bool
 }
 
 // Type gets the type of the Extension config created by this factory.
@@ -392,8 +399,8 @@ func (f *ExampleExtensionFactory) Type() string {
 
 // CreateDefaultConfig creates the default configuration for the Extension.
 func (f *ExampleExtensionFactory) CreateDefaultConfig() configmodels.Extension {
-	return &ExampleExtension{
-		ExtensionSettings: configmodels.ExtensionSettings{},
+	return &ExampleExtensionCfg{
+		ExtensionSettings: configmodels.ExtensionSettings{TypeVal: f.Type()},
 		ExtraSetting:      "extra string setting",
 		ExtraMapSetting:   nil,
 		ExtraListSetting:  nil,
@@ -401,11 +408,11 @@ func (f *ExampleExtensionFactory) CreateDefaultConfig() configmodels.Extension {
 }
 
 // CreateExtension creates an Extension based on this config.
-func (f *ExampleExtensionFactory) CreateExtension(
-	logger *zap.Logger,
-	cfg configmodels.Extension,
-) (component.ServiceExtension, error) {
-	return nil, fmt.Errorf("cannot create %q extension type", f.Type())
+func (f *ExampleExtensionFactory) CreateExtension(_ context.Context, _ component.ExtensionCreateParams, _ configmodels.Extension) (component.ServiceExtension, error) {
+	if f.FailCreation {
+		return nil, fmt.Errorf("cannot create %q extension type", f.Type())
+	}
+	return &ExampleExtension{}, nil
 }
 
 // ExampleComponents registers example factories. This is only used by tests.

@@ -21,9 +21,9 @@ import (
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
 )
 
 // samplingPriority has the semantic result of parsing the "sampling.priority"
@@ -56,11 +56,11 @@ type tracesamplerprocessor struct {
 	hashSeed           uint32
 }
 
-// NewTraceProcessor returns a processor.TraceProcessor that will perform head sampling according to the given
+// newTraceProcessor returns a processor.TraceProcessor that will perform head sampling according to the given
 // configuration.
-func NewTraceProcessor(nextConsumer consumer.TraceConsumerOld, cfg Config) (component.TraceProcessorOld, error) {
+func newTraceProcessor(nextConsumer consumer.TraceConsumerOld, cfg Config) (component.TraceProcessorOld, error) {
 	if nextConsumer == nil {
-		return nil, oterr.ErrNilNextConsumer
+		return nil, componenterror.ErrNilNextConsumer
 	}
 
 	return &tracesamplerprocessor{
@@ -111,12 +111,12 @@ func (tsp *tracesamplerprocessor) GetCapabilities() component.ProcessorCapabilit
 }
 
 // Start is invoked during service startup.
-func (tsp *tracesamplerprocessor) Start(host component.Host) error {
+func (tsp *tracesamplerprocessor) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 // Shutdown is invoked during service shutdown.
-func (tsp *tracesamplerprocessor) Shutdown() error {
+func (tsp *tracesamplerprocessor) Shutdown(context.Context) error {
 	return nil
 }
 

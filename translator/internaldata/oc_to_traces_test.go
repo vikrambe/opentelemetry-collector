@@ -15,9 +15,7 @@
 package internaldata
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
@@ -27,83 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/internal/data/testdata"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
 )
-
-func TestOcNodeResourceToInternal(t *testing.T) {
-	resourceSpans := data.NewEmptyResourceSpans()
-	ocNodeResourceToInternal(nil, nil, resourceSpans)
-	assert.EqualValues(t, true, resourceSpans.Resource().IsNil())
-
-	resourceSpans = data.NewEmptyResourceSpans()
-	ocNode := &occommon.Node{}
-	ocResource := &ocresource.Resource{}
-	ocNodeResourceToInternal(ocNode, ocResource, resourceSpans)
-	assert.EqualValues(t, true, resourceSpans.Resource().IsNil())
-
-	ts, err := ptypes.TimestampProto(time.Date(2020, 2, 11, 20, 26, 0, 0, time.UTC))
-	assert.NoError(t, err)
-
-	ocNode = &occommon.Node{
-		Identifier: &occommon.ProcessIdentifier{
-			HostName:       "host1",
-			Pid:            123,
-			StartTimestamp: ts,
-		},
-		LibraryInfo: &occommon.LibraryInfo{
-			Language:           occommon.LibraryInfo_CPP,
-			ExporterVersion:    "v1.2.0",
-			CoreLibraryVersion: "v2.0.1",
-		},
-		ServiceInfo: &occommon.ServiceInfo{
-			Name: "svcA",
-		},
-		Attributes: map[string]string{
-			"node-attr": "val1",
-		},
-	}
-	ocResource = &ocresource.Resource{
-		Type: "good-resource",
-		Labels: map[string]string{
-			"resource-attr": "val2",
-		},
-	}
-	expectedAttrs := data.NewAttributeMap(map[string]data.AttributeValue{
-		conventions.AttributeHostHostname:       data.NewAttributeValueString("host1"),
-		conventions.OCAttributeProcessID:        data.NewAttributeValueInt(123),
-		conventions.OCAttributeProcessStartTime: data.NewAttributeValueString("2020-02-11T20:26:00Z"),
-		conventions.AttributeLibraryLanguage:    data.NewAttributeValueString("CPP"),
-		conventions.OCAttributeExporterVersion:  data.NewAttributeValueString("v1.2.0"),
-		conventions.AttributeLibraryVersion:     data.NewAttributeValueString("v2.0.1"),
-		conventions.AttributeServiceName:        data.NewAttributeValueString("svcA"),
-		"node-attr":                             data.NewAttributeValueString("val1"),
-		conventions.OCAttributeResourceType:     data.NewAttributeValueString("good-resource"),
-		"resource-attr":                         data.NewAttributeValueString("val2"),
-	})
-
-	resourceSpans = data.NewEmptyResourceSpans()
-	ocNodeResourceToInternal(ocNode, ocResource, resourceSpans)
-	assert.EqualValues(t, expectedAttrs.Sort(), resourceSpans.Resource().Attributes().Sort())
-
-	// Make sure hard-coded fields override same-name values in Attributes.
-	// To do that add Attributes with same-name.
-	for i := 0; i < expectedAttrs.Len(); i++ {
-		// Set all except "attr1" which is not a hard-coded field to some bogus values.
-
-		if !strings.Contains(expectedAttrs.GetAttribute(i).Key(), "-attr") {
-			ocNode.Attributes[expectedAttrs.GetAttribute(i).Key()] = "this will be overridden 1"
-		}
-	}
-	ocResource.Labels[conventions.OCAttributeResourceType] = "this will be overridden 2"
-
-	// Convert again.
-	resourceSpans = data.NewEmptyResourceSpans()
-	ocNodeResourceToInternal(ocNode, ocResource, resourceSpans)
-	// And verify that same-name attributes were ignored.
-	assert.EqualValues(t, expectedAttrs.Sort(), resourceSpans.Resource().Attributes().Sort())
-}
 
 func TestOcTraceStateToInternal(t *testing.T) {
 	assert.EqualValues(t, "", ocTraceStateToInternal(nil))
@@ -127,29 +51,33 @@ func TestOcTraceStateToInternal(t *testing.T) {
 }
 
 func TestOcAttrsToInternal(t *testing.T) {
-	attrs, droppedAttr := ocAttrsToInternal(nil)
-	assert.EqualValues(t, data.NewAttributeMap(nil), attrs)
-	assert.EqualValues(t, 0, droppedAttr)
+	attrs := pdata.NewAttributeMap()
+	ocAttrsToInternal(nil, attrs)
+	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
+	assert.EqualValues(t, 0, ocAttrsToDroppedAttributes(nil))
 
 	ocAttrs := &octrace.Span_Attributes{}
-	attrs, droppedAttr = ocAttrsToInternal(ocAttrs)
-	assert.EqualValues(t, data.NewAttributeMap(data.AttributesMap{}), attrs)
-	assert.EqualValues(t, 0, droppedAttr)
+	attrs = pdata.NewAttributeMap()
+	ocAttrsToInternal(ocAttrs, attrs)
+	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
+	assert.EqualValues(t, 0, ocAttrsToDroppedAttributes(ocAttrs))
 
 	ocAttrs = &octrace.Span_Attributes{
 		DroppedAttributesCount: 123,
 	}
-	attrs, droppedAttr = ocAttrsToInternal(ocAttrs)
-	assert.EqualValues(t, data.NewAttributeMap(data.AttributesMap{}), attrs)
-	assert.EqualValues(t, 123, droppedAttr)
+	attrs = pdata.NewAttributeMap()
+	ocAttrsToInternal(ocAttrs, attrs)
+	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
+	assert.EqualValues(t, 123, ocAttrsToDroppedAttributes(ocAttrs))
 
 	ocAttrs = &octrace.Span_Attributes{
 		AttributeMap:           map[string]*octrace.AttributeValue{},
 		DroppedAttributesCount: 234,
 	}
-	attrs, droppedAttr = ocAttrsToInternal(ocAttrs)
-	assert.EqualValues(t, data.NewAttributeMap(data.AttributesMap{}), attrs)
-	assert.EqualValues(t, 234, droppedAttr)
+	attrs = pdata.NewAttributeMap()
+	ocAttrsToInternal(ocAttrs, attrs)
+	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
+	assert.EqualValues(t, 234, ocAttrsToDroppedAttributes(ocAttrs))
 
 	ocAttrs = &octrace.Span_Attributes{
 		AttributeMap: map[string]*octrace.AttributeValue{
@@ -159,14 +87,15 @@ func TestOcAttrsToInternal(t *testing.T) {
 		},
 		DroppedAttributesCount: 234,
 	}
-	attrs, droppedAttr = ocAttrsToInternal(ocAttrs)
+	attrs = pdata.NewAttributeMap()
+	ocAttrsToInternal(ocAttrs, attrs)
 	assert.EqualValues(t,
-		data.NewAttributeMap(
-			data.AttributesMap{
-				"abc": data.NewAttributeValueString("def"),
+		pdata.NewAttributeMap().InitFromMap(
+			map[string]pdata.AttributeValue{
+				"abc": pdata.NewAttributeValueString("def"),
 			}),
 		attrs)
-	assert.EqualValues(t, 234, droppedAttr)
+	assert.EqualValues(t, 234, ocAttrsToDroppedAttributes(ocAttrs))
 
 	ocAttrs.AttributeMap["intval"] = &octrace.AttributeValue{
 		Value: &octrace.AttributeValue_IntValue{IntValue: 345},
@@ -177,16 +106,17 @@ func TestOcAttrsToInternal(t *testing.T) {
 	ocAttrs.AttributeMap["doubleval"] = &octrace.AttributeValue{
 		Value: &octrace.AttributeValue_DoubleValue{DoubleValue: 4.5},
 	}
-	attrs, droppedAttr = ocAttrsToInternal(ocAttrs)
+	attrs = pdata.NewAttributeMap()
+	ocAttrsToInternal(ocAttrs, attrs)
 
-	expectedAttr := data.NewAttributeMap(data.AttributesMap{
-		"abc":       data.NewAttributeValueString("def"),
-		"intval":    data.NewAttributeValueInt(345),
-		"boolval":   data.NewAttributeValueBool(true),
-		"doubleval": data.NewAttributeValueDouble(4.5),
+	expectedAttr := pdata.NewAttributeMap().InitFromMap(map[string]pdata.AttributeValue{
+		"abc":       pdata.NewAttributeValueString("def"),
+		"intval":    pdata.NewAttributeValueInt(345),
+		"boolval":   pdata.NewAttributeValueBool(true),
+		"doubleval": pdata.NewAttributeValueDouble(4.5),
 	})
 	assert.EqualValues(t, expectedAttr.Sort(), attrs.Sort())
-	assert.EqualValues(t, 234, droppedAttr)
+	assert.EqualValues(t, 234, ocAttrsToDroppedAttributes(ocAttrs))
 }
 
 func TestOcSpanKindToInternal(t *testing.T) {
@@ -360,7 +290,7 @@ func TestOcToInternal(t *testing.T) {
 
 	tests := []struct {
 		name string
-		td   data.TraceData
+		td   pdata.Traces
 		oc   consumerdata.TraceData
 	}{
 		{
@@ -371,7 +301,7 @@ func TestOcToInternal(t *testing.T) {
 
 		{
 			name: "one-empty-resource-spans",
-			td:   testdata.GenerateTraceDataOneEmptyResourceSpans(),
+			td:   wrapTraceWithEmptyResource(testdata.GenerateTraceDataOneEmptyResourceSpans()),
 			oc:   consumerdata.TraceData{Node: ocNode},
 		},
 
@@ -383,7 +313,7 @@ func TestOcToInternal(t *testing.T) {
 
 		{
 			name: "one-span-no-resource",
-			td:   testdata.GenerateTraceDataOneSpanNoResource(),
+			td:   wrapTraceWithEmptyResource(testdata.GenerateTraceDataOneSpanNoResource()),
 			oc: consumerdata.TraceData{
 				Node:     ocNode,
 				Resource: &ocresource.Resource{},
@@ -392,13 +322,22 @@ func TestOcToInternal(t *testing.T) {
 		},
 
 		{
-
 			name: "one-span",
 			td:   testdata.GenerateTraceDataOneSpan(),
 			oc: consumerdata.TraceData{
 				Node:     ocNode,
 				Resource: ocResource1,
 				Spans:    []*octrace.Span{ocSpan1},
+			},
+		},
+
+		{
+			name: "one-span-one-nil",
+			td:   testdata.GenerateTraceDataOneSpan(),
+			oc: consumerdata.TraceData{
+				Node:     ocNode,
+				Resource: ocResource1,
+				Spans:    []*octrace.Span{ocSpan1, nil},
 			},
 		},
 
@@ -433,13 +372,23 @@ func TestOcToInternal(t *testing.T) {
 		},
 	}
 
-	// Equal number of tests even though there is an extra test "two-spans-and-separate-in-the-middle"
-	// but the test case GenerateTraceDataNoSpans it is impossible to get from OC data.
-	assert.EqualValues(t, testdata.NumTraceTests, len(tests))
+	// Extra test:
+	//	* "two-spans-and-separate-in-the-middle"
+	// Missing tests (impossible to generate):
+	//  * GenerateTraceDataOneEmptyOneNilResourceSpans
+	//	* GenerateTraceDataOneEmptyInstrumentationLibrary
+	//	* GenerateTraceDataOneEmptyOneNilInstrumentationLibrary
+	assert.EqualValues(t, testdata.NumTraceTests-2, len(tests))
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assert.EqualValues(t, test.td, OCToTraceData(test.oc))
 		})
 	}
+}
+
+// TODO: Try to avoid unnecessary Resource object allocation.
+func wrapTraceWithEmptyResource(td pdata.Traces) pdata.Traces {
+	td.ResourceSpans().At(0).Resource().InitEmpty()
+	return td
 }

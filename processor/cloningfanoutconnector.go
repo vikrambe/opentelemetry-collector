@@ -18,15 +18,16 @@ import (
 	"context"
 
 	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
-	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 	resourcepb "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
 	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	"github.com/golang/protobuf/proto"
 
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/converter"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdatautil"
 )
 
 // This file contains implementations of cloning Trace/Metrics connectors
@@ -37,6 +38,10 @@ import (
 // CreateMetricsCloningFanOutConnector is a placeholder function for now.
 // It supposed to create an old type connector or a new type connector based on type of provided metrics consumer.
 func CreateMetricsCloningFanOutConnector(mcs []consumer.MetricsConsumerBase) consumer.MetricsConsumerBase {
+	if len(mcs) == 1 {
+		// Don't wrap if no need to do it.
+		return mcs[0]
+	}
 	metricsConsumersOld := make([]consumer.MetricsConsumerOld, 0, len(mcs))
 	metricsConsumers := make([]consumer.MetricsConsumer, 0, len(mcs))
 	allMetricsConsumersOld := true
@@ -47,18 +52,17 @@ func CreateMetricsCloningFanOutConnector(mcs []consumer.MetricsConsumerBase) con
 		} else {
 			metricsConsumerOld := mc.(consumer.MetricsConsumerOld)
 			metricsConsumersOld = append(metricsConsumersOld, metricsConsumerOld)
-			metricsConsumers = append(metricsConsumers, consumer.NewInternalToOCMetricsConverter(metricsConsumerOld))
+			metricsConsumers = append(metricsConsumers, converter.NewInternalToOCMetricsConverter(metricsConsumerOld))
 		}
 	}
 
 	if allMetricsConsumersOld {
-		return NewMetricsCloningFanOutConnectorOld(metricsConsumersOld)
+		return newMetricsCloningFanOutConnectorOld(metricsConsumersOld)
 	}
-	return NewMetricsCloningFanOutConnector(metricsConsumers)
+	return newMetricsCloningFanOutConnector(metricsConsumers)
 }
 
-// NewMetricsCloningFanOutConnectorOld wraps multiple metrics consumers in a single one.
-func NewMetricsCloningFanOutConnectorOld(mcs []consumer.MetricsConsumerOld) consumer.MetricsConsumerOld {
+func newMetricsCloningFanOutConnectorOld(mcs []consumer.MetricsConsumerOld) consumer.MetricsConsumerOld {
 	return metricsCloningFanOutConnectorOld(mcs)
 }
 
@@ -73,8 +77,7 @@ func (mfc metricsCloningFanOutConnectorOld) ConsumeMetricsData(ctx context.Conte
 	// Fan out to first len-1 consumers.
 	for i := 0; i < len(mfc)-1; i++ {
 		// Create a clone of data. We need to clone because consumers may modify the data.
-		clone := cloneMetricsDataOld(&md)
-		if err := mfc[i].ConsumeMetricsData(ctx, *clone); err != nil {
+		if err := mfc[i].ConsumeMetricsData(ctx, pdatautil.CloneMetricsDataOld(md)); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -87,11 +90,10 @@ func (mfc metricsCloningFanOutConnectorOld) ConsumeMetricsData(ctx context.Conte
 		}
 	}
 
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
-// NewMetricsCloningFanOutConnector wraps multiple metrics consumers in a single one.
-func NewMetricsCloningFanOutConnector(mcs []consumer.MetricsConsumer) consumer.MetricsConsumer {
+func newMetricsCloningFanOutConnector(mcs []consumer.MetricsConsumer) consumer.MetricsConsumer {
 	return metricsCloningFanOutConnector(mcs)
 }
 
@@ -100,13 +102,13 @@ type metricsCloningFanOutConnector []consumer.MetricsConsumer
 var _ consumer.MetricsConsumer = (*metricsCloningFanOutConnector)(nil)
 
 // ConsumeMetrics exports the MetricsData to all consumers wrapped by the current one.
-func (mfc metricsCloningFanOutConnector) ConsumeMetrics(ctx context.Context, md data.MetricData) error {
+func (mfc metricsCloningFanOutConnector) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
 	var errs []error
 
 	// Fan out to first len-1 consumers.
 	for i := 0; i < len(mfc)-1; i++ {
 		// Create a clone of data. We need to clone because consumers may modify the data.
-		clone := md.Clone()
+		clone := pdatautil.CloneMetrics(md)
 		if err := mfc[i].ConsumeMetrics(ctx, clone); err != nil {
 			errs = append(errs, err)
 		}
@@ -120,12 +122,16 @@ func (mfc metricsCloningFanOutConnector) ConsumeMetrics(ctx context.Context, md 
 		}
 	}
 
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
 // CreateTraceCloningFanOutConnector is a placeholder function for now.
 // It supposed to create an old type connector or a new type connector based on type of provided trace consumer.
 func CreateTraceCloningFanOutConnector(tcs []consumer.TraceConsumerBase) consumer.TraceConsumerBase {
+	if len(tcs) == 1 {
+		// Don't wrap if no need to do it.
+		return tcs[0]
+	}
 	traceConsumersOld := make([]consumer.TraceConsumerOld, 0, len(tcs))
 	traceConsumers := make([]consumer.TraceConsumer, 0, len(tcs))
 	allTraceConsumersOld := true
@@ -136,18 +142,17 @@ func CreateTraceCloningFanOutConnector(tcs []consumer.TraceConsumerBase) consume
 		} else {
 			traceConsumerOld := tc.(consumer.TraceConsumerOld)
 			traceConsumersOld = append(traceConsumersOld, traceConsumerOld)
-			traceConsumers = append(traceConsumers, consumer.NewInternalToOCTraceConverter(traceConsumerOld))
+			traceConsumers = append(traceConsumers, converter.NewInternalToOCTraceConverter(traceConsumerOld))
 		}
 	}
 
 	if allTraceConsumersOld {
-		return NewTraceCloningFanOutConnectorOld(traceConsumersOld)
+		return newTraceCloningFanOutConnectorOld(traceConsumersOld)
 	}
-	return NewTraceCloningFanOutConnector(traceConsumers)
+	return newTraceCloningFanOutConnector(traceConsumers)
 }
 
-// NewTraceCloningFanOutConnectorOld wraps multiple trace consumers in a single one.
-func NewTraceCloningFanOutConnectorOld(tcs []consumer.TraceConsumerOld) consumer.TraceConsumerOld {
+func newTraceCloningFanOutConnectorOld(tcs []consumer.TraceConsumerOld) consumer.TraceConsumerOld {
 	return traceCloningFanOutConnectorOld(tcs)
 }
 
@@ -162,8 +167,7 @@ func (tfc traceCloningFanOutConnectorOld) ConsumeTraceData(ctx context.Context, 
 	// Fan out to first len-1 consumers.
 	for i := 0; i < len(tfc)-1; i++ {
 		// Create a clone of data. We need to clone because consumers may modify the data.
-		clone := cloneTraceDataOld(&td)
-		if err := tfc[i].ConsumeTraceData(ctx, *clone); err != nil {
+		if err := tfc[i].ConsumeTraceData(ctx, cloneTraceDataOld(td)); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -176,11 +180,10 @@ func (tfc traceCloningFanOutConnectorOld) ConsumeTraceData(ctx context.Context, 
 		}
 	}
 
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
-// NewTraceCloningFanOutConnector wraps multiple trace consumers in a single one.
-func NewTraceCloningFanOutConnector(tcs []consumer.TraceConsumer) consumer.TraceConsumer {
+func newTraceCloningFanOutConnector(tcs []consumer.TraceConsumer) consumer.TraceConsumer {
 	return traceCloningFanOutConnector(tcs)
 }
 
@@ -189,14 +192,14 @@ type traceCloningFanOutConnector []consumer.TraceConsumer
 var _ consumer.TraceConsumer = (*traceCloningFanOutConnector)(nil)
 
 // ConsumeTraceData exports the span data to all trace consumers wrapped by the current one.
-func (tfc traceCloningFanOutConnector) ConsumeTrace(ctx context.Context, td data.TraceData) error {
+func (tfc traceCloningFanOutConnector) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
 	var errs []error
 
 	// Fan out to first len-1 consumers.
 	for i := 0; i < len(tfc)-1; i++ {
 		// Create a clone of data. We need to clone because consumers may modify the data.
 		clone := td.Clone()
-		if err := tfc[i].ConsumeTrace(ctx, clone); err != nil {
+		if err := tfc[i].ConsumeTraces(ctx, clone); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -204,16 +207,16 @@ func (tfc traceCloningFanOutConnector) ConsumeTrace(ctx context.Context, td data
 	if len(tfc) > 0 {
 		// Give the original data to the last consumer.
 		lastTc := tfc[len(tfc)-1]
-		if err := lastTc.ConsumeTrace(ctx, td); err != nil {
+		if err := lastTc.ConsumeTraces(ctx, td); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
-	return oterr.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
 }
 
-func cloneTraceDataOld(td *consumerdata.TraceData) *consumerdata.TraceData {
-	clone := &consumerdata.TraceData{
+func cloneTraceDataOld(td consumerdata.TraceData) consumerdata.TraceData {
+	clone := consumerdata.TraceData{
 		SourceFormat: td.SourceFormat,
 		Node:         proto.Clone(td.Node).(*commonpb.Node),
 		Resource:     proto.Clone(td.Resource).(*resourcepb.Resource),
@@ -225,24 +228,6 @@ func cloneTraceDataOld(td *consumerdata.TraceData) *consumerdata.TraceData {
 		for _, span := range td.Spans {
 			spanClone := proto.Clone(span).(*tracepb.Span)
 			clone.Spans = append(clone.Spans, spanClone)
-		}
-	}
-
-	return clone
-}
-
-func cloneMetricsDataOld(md *consumerdata.MetricsData) *consumerdata.MetricsData {
-	clone := &consumerdata.MetricsData{
-		Node:     proto.Clone(md.Node).(*commonpb.Node),
-		Resource: proto.Clone(md.Resource).(*resourcepb.Resource),
-	}
-
-	if md.Metrics != nil {
-		clone.Metrics = make([]*metricspb.Metric, 0, len(md.Metrics))
-
-		for _, metric := range md.Metrics {
-			metricClone := proto.Clone(metric).(*metricspb.Metric)
-			clone.Metrics = append(clone.Metrics, metricClone)
 		}
 	}
 

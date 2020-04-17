@@ -23,10 +23,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdatautil"
+	"github.com/open-telemetry/opentelemetry-collector/internal/data/testdata"
 )
 
-func TestSinkTraceExporter(t *testing.T) {
-	sink := new(SinkTraceExporter)
+func TestSinkTraceExporterOld(t *testing.T) {
+	sink := new(SinkTraceExporterOld)
 	td := consumerdata.TraceData{
 		Spans: make([]*tracepb.Span, 7),
 	}
@@ -40,8 +43,21 @@ func TestSinkTraceExporter(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestSinkMetricsExporter(t *testing.T) {
-	sink := new(SinkMetricsExporter)
+func TestSinkTraceExporter(t *testing.T) {
+	sink := new(SinkTraceExporter)
+	td := testdata.GenerateTraceDataOneSpan()
+	want := make([]pdata.Traces, 0, 7)
+	for i := 0; i < 7; i++ {
+		err := sink.ConsumeTraces(context.Background(), td)
+		require.Nil(t, err)
+		want = append(want, td)
+	}
+	got := sink.AllTraces()
+	assert.Equal(t, want, got)
+}
+
+func TestSinkMetricsExporterOld(t *testing.T) {
+	sink := new(SinkMetricsExporterOld)
 	md := consumerdata.MetricsData{
 		Metrics: make([]*metricspb.Metric, 7),
 	}
@@ -50,6 +66,19 @@ func TestSinkMetricsExporter(t *testing.T) {
 		err := sink.ConsumeMetricsData(context.Background(), md)
 		require.Nil(t, err)
 		want = append(want, md)
+	}
+	got := sink.AllMetrics()
+	assert.Equal(t, want, got)
+}
+
+func TestSinkMetricsExporter(t *testing.T) {
+	sink := new(SinkMetricsExporter)
+	md := testdata.GenerateMetricDataOneMetric()
+	want := make([]pdata.Metrics, 0, 7)
+	for i := 0; i < 7; i++ {
+		err := sink.ConsumeMetrics(context.Background(), pdatautil.MetricsFromInternalMetrics(md))
+		require.Nil(t, err)
+		want = append(want, pdatautil.MetricsFromInternalMetrics(md))
 	}
 	got := sink.AllMetrics()
 	assert.Equal(t, want, got)

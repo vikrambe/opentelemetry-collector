@@ -23,6 +23,14 @@ const (
 	// flags
 	configCfg      = "config"
 	memBallastFlag = "mem-ballast-size-mib"
+
+	kindLogKey       = "component_kind"
+	kindLogReceiver  = "receiver"
+	kindLogProcessor = "processor"
+	kindLogExporter  = "exporter"
+	kindLogExtension = "extension"
+	typeLogKey       = "component_type"
+	nameLogKey       = "component_name"
 )
 
 var (

@@ -25,7 +25,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
@@ -58,14 +57,13 @@ func TestGrpcGateway_endToEnd(t *testing.T) {
 	addr := testutils.GetAvailableLocalAddress(t)
 
 	// Set the buffer count to 1 to make it flush the test span immediately.
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(exportertest.SinkTraceExporterOld)
 	ocr, err := New(ocReceiver, "tcp", addr, sink, nil)
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
+	err = ocr.Start(context.Background(), componenttest.NewNopHost())
 	require.NoError(t, err, "Failed to start trace receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
 	// TODO(songy23): make starting server deterministic
 	// Wait for the servers to start
@@ -150,25 +148,19 @@ func TestGrpcGateway_endToEnd(t *testing.T) {
 		},
 	}
 
-	if !reflect.DeepEqual(got, want) {
-		gj, wj := exportertest.ToJSON(got), exportertest.ToJSON(want)
-		if !bytes.Equal(gj, wj) {
-			t.Errorf("Mismatched responses\nGot:\n\t%v\n\t%s\nWant:\n\t%v\n\t%s", got, gj, want, wj)
-		}
-	}
+	assert.EqualValues(t, want, got)
 }
 
 func TestTraceGrpcGatewayCors_endToEnd(t *testing.T) {
 	addr := testutils.GetAvailableLocalAddress(t)
 	corsOrigins := []string{"allowed-*.com"}
 
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(exportertest.SinkTraceExporterOld)
 	ocr, err := New(ocReceiver, "tcp", addr, sink, nil, WithCorsOrigins(corsOrigins))
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
+	err = ocr.Start(context.Background(), componenttest.NewNopHost())
 	require.NoError(t, err, "Failed to start trace receiver: %v", err)
 
 	// TODO(songy23): make starting server deterministic
@@ -188,13 +180,12 @@ func TestMetricsGrpcGatewayCors_endToEnd(t *testing.T) {
 	addr := testutils.GetAvailableLocalAddress(t)
 	corsOrigins := []string{"allowed-*.com"}
 
-	sink := new(exportertest.SinkMetricsExporter)
+	sink := new(exportertest.SinkMetricsExporterOld)
 	ocr, err := New(ocReceiver, "tcp", addr, nil, sink, WithCorsOrigins(corsOrigins))
 	require.NoError(t, err, "Failed to create metrics receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
+	err = ocr.Start(context.Background(), componenttest.NewNopHost())
 	require.NoError(t, err, "Failed to start metrics receiver: %v", err)
 
 	// TODO(songy23): make starting server deterministic
@@ -217,14 +208,13 @@ func TestAcceptAllGRPCProtoAffiliatedContentTypes(t *testing.T) {
 	t.Skip("Currently a flaky test as we need a way to flush all written traces")
 
 	addr := testutils.GetAvailableLocalAddress(t)
-	cbts := new(exportertest.SinkTraceExporter)
+	cbts := new(exportertest.SinkTraceExporterOld)
 	ocr, err := New(ocReceiver, "tcp", addr, cbts, nil)
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
+	err = ocr.Start(context.Background(), componenttest.NewNopHost())
 	require.NoError(t, err, "Failed to start the trace receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
 	// Now start the client with the various Proto affiliated gRPC Content-SubTypes as per:
 	//      https://godoc.org/google.golang.org/grpc#CallContentSubtype
@@ -361,13 +351,12 @@ func TestNewPortAlreadyUsed(t *testing.T) {
 
 func TestMultipleStopReceptionShouldNotError(t *testing.T) {
 	addr := testutils.GetAvailableLocalAddress(t)
-	r, err := New(ocReceiver, "tcp", addr, new(exportertest.SinkTraceExporter), new(exportertest.SinkMetricsExporter))
+	r, err := New(ocReceiver, "tcp", addr, new(exportertest.SinkTraceExporterOld), new(exportertest.SinkMetricsExporterOld))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
-	mh := component.NewMockHost()
-	require.NoError(t, r.Start(mh))
-	require.NoError(t, r.Shutdown())
+	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+	require.NoError(t, r.Shutdown(context.Background()))
 }
 
 func TestStartWithoutConsumersShouldFail(t *testing.T) {
@@ -376,8 +365,7 @@ func TestStartWithoutConsumersShouldFail(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
-	mh := component.NewMockHost()
-	require.Error(t, r.Start(mh))
+	require.Error(t, r.Start(context.Background(), componenttest.NewNopHost()))
 }
 
 func tempSocketName(t *testing.T) string {
@@ -392,14 +380,12 @@ func tempSocketName(t *testing.T) string {
 
 func TestReceiveOnUnixDomainSocket_endToEnd(t *testing.T) {
 	socketName := tempSocketName(t)
-	cbts := new(exportertest.SinkTraceExporter)
+	cbts := new(exportertest.SinkTraceExporterOld)
 	r, err := New(ocReceiver, "unix", socketName, cbts, nil)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	mh := component.NewMockHost()
-	err = r.Start(mh)
-	require.NoError(t, err)
-	defer r.Shutdown()
+	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+	defer r.Shutdown(context.Background())
 
 	// Wait for the servers to start
 	<-time.After(10 * time.Millisecond)
@@ -543,9 +529,8 @@ func TestOCReceiverTrace_HandleNextConsumerResponse(t *testing.T) {
 				require.NotNil(t, ocr)
 
 				ocr.traceConsumer = sink
-				err = ocr.Start(component.NewMockHost())
-				require.Nil(t, err)
-				defer ocr.Shutdown()
+				require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
+				defer ocr.Shutdown(context.Background())
 
 				cc, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 				if err != nil {
@@ -697,9 +682,8 @@ func TestOCReceiverMetrics_HandleNextConsumerResponse(t *testing.T) {
 				require.NotNil(t, ocr)
 
 				ocr.metricsConsumer = sink
-				err = ocr.Start(component.NewMockHost())
-				require.Nil(t, err)
-				defer ocr.Shutdown()
+				require.Nil(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
+				defer ocr.Shutdown(context.Background())
 
 				cc, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 				if err != nil {

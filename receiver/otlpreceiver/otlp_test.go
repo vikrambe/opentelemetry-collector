@@ -24,14 +24,10 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
-	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
-	octrace "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 	collectortrace "github.com/open-telemetry/opentelemetry-proto/gen/go/collector/trace/v1"
 	otlpcommon "github.com/open-telemetry/opentelemetry-proto/gen/go/common/v1"
 	otlpresource "github.com/open-telemetry/opentelemetry-proto/gen/go/resource/v1"
@@ -43,11 +39,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
-	"github.com/open-telemetry/opentelemetry-collector/internal"
 	"github.com/open-telemetry/opentelemetry-collector/observability/observabilitytest"
 	"github.com/open-telemetry/opentelemetry-collector/testutils"
 	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
@@ -55,7 +49,6 @@ import (
 
 const otlpReceiver = "otlp_receiver_test"
 
-// TODO(nilebox): Migrate tests to use assert for validating functionality.
 func TestGrpcGateway_endToEnd(t *testing.T) {
 	addr := testutils.GetAvailableLocalAddress(t)
 
@@ -64,10 +57,8 @@ func TestGrpcGateway_endToEnd(t *testing.T) {
 	ocr, err := New(otlpReceiver, "tcp", addr, sink, nil)
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
-	require.NoError(t, err, "Failed to start trace receiver: %v", err)
-	defer ocr.Shutdown()
+	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()), "Failed to start trace receiver: %v", err)
+	defer ocr.Shutdown(context.Background())
 
 	// TODO(nilebox): make starting server deterministic
 	// Wait for the servers to start
@@ -141,40 +132,43 @@ func TestGrpcGateway_endToEnd(t *testing.T) {
 		t.Errorf("Got unexpected response from trace grpc-gateway: %v", respStr)
 	}
 
-	got := sink.AllTraces()
+	got := sink.AllTraces()[0]
 
-	want := []consumerdata.TraceData{
+	want := pdata.TracesFromOtlp([]*otlptrace.ResourceSpans{
 		{
-			Node: &occommon.Node{
-				Identifier: &occommon.ProcessIdentifier{HostName: "testHost"},
+			Resource: &otlpresource.Resource{
+				Attributes: []*otlpcommon.AttributeKeyValue{
+					{
+						Key:         conventions.AttributeHostHostname,
+						StringValue: "testHost",
+						Type:        otlpcommon.AttributeKeyValue_STRING,
+					},
+				},
 			},
-			Resource: &ocresource.Resource{},
-			Spans: []*octrace.Span{
+			InstrumentationLibrarySpans: []*otlptrace.InstrumentationLibrarySpans{
 				{
-					TraceId:   []byte{0x5B, 0x8E, 0xFF, 0xF7, 0x98, 0x3, 0x81, 0x3, 0xD2, 0x69, 0xB6, 0x33, 0x81, 0x3F, 0xC6, 0xC},
-					SpanId:    []byte{0xEE, 0xE1, 0x9B, 0x7E, 0xC3, 0xC1, 0xB1, 0x73},
-					Name:      &octrace.TruncatableString{Value: "testSpan"},
-					StartTime: internal.TimeToTimestamp(time.Unix(1544712660, 0).UTC()),
-					EndTime:   internal.TimeToTimestamp(time.Unix(1544712661, 0).UTC()),
-					Attributes: &octrace.Span_Attributes{
-						AttributeMap: map[string]*octrace.AttributeValue{
-							"attr1": {
-								Value: &octrace.AttributeValue_IntValue{IntValue: 55},
+					Spans: []*otlptrace.Span{
+						{
+							TraceId:           []byte{0x5B, 0x8E, 0xFF, 0xF7, 0x98, 0x3, 0x81, 0x3, 0xD2, 0x69, 0xB6, 0x33, 0x81, 0x3F, 0xC6, 0xC},
+							SpanId:            []byte{0xEE, 0xE1, 0x9B, 0x7E, 0xC3, 0xC1, 0xB1, 0x73},
+							Name:              "testSpan",
+							StartTimeUnixNano: 1544712660000000000,
+							EndTimeUnixNano:   1544712661000000000,
+							Attributes: []*otlpcommon.AttributeKeyValue{
+								{
+									Key:      "attr1",
+									Type:     otlpcommon.AttributeKeyValue_INT,
+									IntValue: 55,
+								},
 							},
 						},
 					},
 				},
 			},
-			SourceFormat: "otlp_trace",
 		},
-	}
+	})
 
-	if !reflect.DeepEqual(got, want) {
-		gj, wj := exportertest.ToJSON(got), exportertest.ToJSON(want)
-		if !bytes.Equal(gj, wj) {
-			t.Errorf("Mismatched responses\nGot:\n\t%v\n\t%s\nWant:\n\t%v\n\t%s", got, gj, want, wj)
-		}
-	}
+	assert.EqualValues(t, got, want)
 }
 
 func TestTraceGrpcGatewayCors_endToEnd(t *testing.T) {
@@ -184,11 +178,9 @@ func TestTraceGrpcGatewayCors_endToEnd(t *testing.T) {
 	sink := new(exportertest.SinkTraceExporter)
 	ocr, err := New(otlpReceiver, "tcp", addr, sink, nil, WithCorsOrigins(corsOrigins))
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
-	require.NoError(t, err, "Failed to start trace receiver: %v", err)
+	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()), "Failed to start trace receiver: %v", err)
 
 	// TODO(nilebox): make starting server deterministic
 	// Wait for the servers to start
@@ -210,11 +202,9 @@ func TestMetricsGrpcGatewayCors_endToEnd(t *testing.T) {
 	sink := new(exportertest.SinkMetricsExporter)
 	ocr, err := New(otlpReceiver, "tcp", addr, nil, sink, WithCorsOrigins(corsOrigins))
 	require.NoError(t, err, "Failed to create metrics receiver: %v", err)
-	defer ocr.Shutdown()
+	defer ocr.Shutdown(context.Background())
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
-	require.NoError(t, err, "Failed to start metrics receiver: %v", err)
+	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()), "Failed to start metrics receiver: %v", err)
 
 	// TODO(nilebox): make starting server deterministic
 	// Wait for the servers to start
@@ -240,10 +230,8 @@ func TestAcceptAllGRPCProtoAffiliatedContentTypes(t *testing.T) {
 	ocr, err := New(otlpReceiver, "tcp", addr, cbts, nil)
 	require.NoError(t, err, "Failed to create trace receiver: %v", err)
 
-	mh := component.NewMockHost()
-	err = ocr.Start(mh)
-	require.NoError(t, err, "Failed to start the trace receiver: %v", err)
-	defer ocr.Shutdown()
+	require.NoError(t, ocr.Start(context.Background(), componenttest.NewNopHost()), "Failed to start the trace receiver: %v", err)
+	defer ocr.Shutdown(context.Background())
 
 	// Now start the client with the various Proto affiliated gRPC Content-SubTypes as per:
 	//      https://godoc.org/google.golang.org/grpc#CallContentSubtype
@@ -391,9 +379,8 @@ func TestMultipleStopReceptionShouldNotError(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
-	mh := component.NewMockHost()
-	require.NoError(t, r.Start(mh))
-	require.NoError(t, r.Shutdown())
+	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+	require.NoError(t, r.Shutdown(context.Background()))
 }
 
 func TestStartWithoutConsumersShouldFail(t *testing.T) {
@@ -402,8 +389,7 @@ func TestStartWithoutConsumersShouldFail(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
-	mh := component.NewMockHost()
-	require.Error(t, r.Start(mh))
+	require.Error(t, r.Start(context.Background(), componenttest.NewNopHost()))
 }
 
 func tempSocketName(t *testing.T) string {
@@ -422,10 +408,8 @@ func TestReceiveOnUnixDomainSocket_endToEnd(t *testing.T) {
 	r, err := New(otlpReceiver, "unix", socketName, cbts, nil)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	mh := component.NewMockHost()
-	err = r.Start(mh)
-	require.NoError(t, err)
-	defer r.Shutdown()
+	require.NoError(t, r.Start(context.Background(), componenttest.NewNopHost()))
+	defer r.Shutdown(context.Background())
 
 	// Wait for the servers to start
 	<-time.After(10 * time.Millisecond)
@@ -566,7 +550,7 @@ func TestOTLPReceiverTrace_HandleNextConsumerResponse(t *testing.T) {
 				doneFn := observabilitytest.SetupRecordedMetricsTest()
 				defer doneFn()
 
-				sink := new(sinkTraceConsumer)
+				sink := new(exportertest.SinkTraceExporter)
 
 				var opts []Option
 				ocr, err := New(otlpReceiver, "tcp", addr, nil, nil, opts...)
@@ -574,9 +558,8 @@ func TestOTLPReceiverTrace_HandleNextConsumerResponse(t *testing.T) {
 				require.NotNil(t, ocr)
 
 				ocr.traceConsumer = sink
-				err = ocr.Start(component.NewMockHost())
-				require.Nil(t, err)
-				defer ocr.Shutdown()
+				require.Nil(t, ocr.Start(context.Background(), componenttest.NewNopHost()))
+				defer ocr.Shutdown(context.Background())
 
 				cc, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock())
 				if err != nil {
@@ -608,29 +591,4 @@ func TestOTLPReceiverTrace_HandleNextConsumerResponse(t *testing.T) {
 			})
 		}
 	}
-}
-
-type sinkTraceConsumer struct {
-	// consumeTraceError is the error to be returned when ConsumeTraceData is
-	// called
-	consumeTraceError error
-
-	traces []consumerdata.TraceData
-}
-
-var _ consumer.TraceConsumerOld = (*sinkTraceConsumer)(nil)
-
-func (stc *sinkTraceConsumer) ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error {
-	if stc.consumeTraceError == nil {
-		stc.traces = append(stc.traces, td)
-	}
-	return stc.consumeTraceError
-}
-
-func (stc *sinkTraceConsumer) SetConsumeTraceError(err error) {
-	stc.consumeTraceError = err
-}
-
-func (stc *sinkTraceConsumer) AllTraces() []consumerdata.TraceData {
-	return stc.traces[:]
 }

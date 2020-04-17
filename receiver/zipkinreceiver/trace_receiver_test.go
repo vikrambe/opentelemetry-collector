@@ -34,56 +34,20 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/consumer"
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
 	"github.com/open-telemetry/opentelemetry-collector/exporter/zipkinexporter"
 	"github.com/open-telemetry/opentelemetry-collector/internal"
-	"github.com/open-telemetry/opentelemetry-collector/oterr"
 	"github.com/open-telemetry/opentelemetry-collector/testutils"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
 	"github.com/open-telemetry/opentelemetry-collector/translator/trace/zipkin"
 )
 
 const zipkinReceiver = "zipkin_receiver_test"
-
-func TestTraceIDConversion(t *testing.T) {
-	longID, _ := zipkinmodel.TraceIDFromHex("01020304050607080102030405060708")
-	shortID, _ := zipkinmodel.TraceIDFromHex("0102030405060708")
-	zeroID, _ := zipkinmodel.TraceIDFromHex("0000000000000000")
-	tests := []struct {
-		name    string
-		id      zipkinmodel.TraceID
-		want    []byte
-		wantErr error
-	}{
-		{
-			name:    "128bit traceID",
-			id:      longID,
-			want:    []byte{1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8},
-			wantErr: nil,
-		},
-		{
-			name:    "64bit traceID",
-			id:      shortID,
-			want:    []byte{0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8},
-			wantErr: nil,
-		},
-		{
-			name:    "zero traceID",
-			id:      zeroID,
-			want:    nil,
-			wantErr: errZeroTraceID,
-		},
-	}
-
-	for _, tc := range tests {
-		got, gotErr := zTraceIDToOCProtoTraceID(tc.id)
-		assert.Equal(t, tc.wantErr, gotErr)
-		assert.Equal(t, tc.want, got)
-	}
-}
 
 func TestShortIDSpanConversion(t *testing.T) {
 	shortID, _ := zipkinmodel.TraceIDFromHex("0102030405060708")
@@ -97,8 +61,7 @@ func TestShortIDSpanConversion(t *testing.T) {
 		SpanContext: zc,
 	}
 
-	ocSpan, _, err := zipkinSpanToTraceSpan(&zs)
-	require.NoError(t, err, "unexpected error %v", err)
+	ocSpan, _ := zipkinSpanToTraceSpan(&zs)
 	require.Len(t, ocSpan.TraceId, 16, "incorrect OC proto trace id length")
 
 	want := []byte{0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8}
@@ -118,12 +81,12 @@ func TestNew(t *testing.T) {
 		{
 			name:    "nil nextConsumer",
 			args:    args{},
-			wantErr: oterr.ErrNilNextConsumer,
+			wantErr: componenterror.ErrNilNextConsumer,
 		},
 		{
 			name: "happy path",
 			args: args{
-				nextConsumer: exportertest.NewNopTraceExporter(),
+				nextConsumer: exportertest.NewNopTraceExporterOld(),
 			},
 		},
 	}
@@ -146,18 +109,17 @@ func TestZipkinReceiverPortAlreadyInUse(t *testing.T) {
 	defer l.Close()
 	_, portStr, err := net.SplitHostPort(l.Addr().String())
 	require.NoError(t, err, "failed to split listener address: %v", err)
-	traceReceiver, err := New(zipkinReceiver, "localhost:"+portStr, exportertest.NewNopTraceExporter())
+	traceReceiver, err := New(zipkinReceiver, "localhost:"+portStr, exportertest.NewNopTraceExporterOld())
 	require.NoError(t, err, "Failed to create receiver: %v", err)
-	mh := component.NewMockHost()
-	err = traceReceiver.Start(mh)
+	err = traceReceiver.Start(context.Background(), componenttest.NewNopHost())
 	if err == nil {
-		traceReceiver.Shutdown()
+		traceReceiver.Shutdown(context.Background())
 		t.Fatal("conflict on port was expected")
 	}
 }
 
 func TestCustomHTTPServer(t *testing.T) {
-	zr, err := New(zipkinReceiver, "localhost:9411", exportertest.NewNopTraceExporter())
+	zr, err := New(zipkinReceiver, "localhost:9411", exportertest.NewNopTraceExporterOld())
 	require.NoError(t, err, "Failed to create receiver: %v", err)
 
 	server := &http.Server{}
@@ -265,7 +227,7 @@ func TestConversionRoundtrip(t *testing.T) {
   }
 }]`)
 
-	zi := &ZipkinReceiver{nextConsumer: exportertest.NewNopTraceExporter()}
+	zi := &ZipkinReceiver{nextConsumer: exportertest.NewNopTraceExporterOld()}
 	ereqs, err := zi.v2ToTraceSpans(receiverInputJSON, nil)
 	require.NoError(t, err)
 
@@ -379,15 +341,14 @@ func TestConversionRoundtrip(t *testing.T) {
 	ze, err := factory.CreateTraceExporter(zap.NewNop(), config)
 	require.NoError(t, err)
 	require.NotNil(t, ze)
-	mh := component.NewMockHost()
-	require.NoError(t, ze.Start(mh))
+	require.NoError(t, ze.Start(context.Background(), componenttest.NewNopHost()))
 
 	for _, treq := range ereqs {
 		require.NoError(t, ze.ConsumeTraceData(context.Background(), treq))
 	}
 
 	// Shutdown the exporter so it can flush any remaining data.
-	assert.NoError(t, ze.Shutdown())
+	assert.NoError(t, ze.Shutdown(context.Background()))
 	backend.Close()
 
 	// The received JSON messages are inside arrays, so reading then directly will
@@ -411,21 +372,21 @@ func TestStartTraceReception(t *testing.T) {
 		},
 		{
 			name: "valid_host",
-			host: component.NewMockHost(),
+			host: componenttest.NewNopHost(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink := new(exportertest.SinkTraceExporter)
+			sink := new(exportertest.SinkTraceExporterOld)
 			zr, err := New(zipkinReceiver, "localhost:0", sink)
 			require.Nil(t, err)
 			require.NotNil(t, zr)
 
-			err = zr.Start(tt.host)
+			err = zr.Start(context.Background(), tt.host)
 			assert.Equal(t, tt.wantErr, err != nil)
 			if !tt.wantErr {
-				require.Nil(t, zr.Shutdown())
+				require.Nil(t, zr.Shutdown(context.Background()))
 			}
 		})
 	}
@@ -468,8 +429,7 @@ func TestSpanKindTranslation(t *testing.T) {
 				},
 				Kind: tt.zipkinKind,
 			}
-			ocSpan, _, err := zipkinSpanToTraceSpan(zs)
-			require.NoError(t, err)
+			ocSpan, _ := zipkinSpanToTraceSpan(zs)
 			assert.EqualValues(t, tt.ocKind, ocSpan.Kind)
 			if tt.otKind != "" {
 				otSpanKind := ocSpan.Attributes.AttributeMap[tracetranslator.TagSpanKind]

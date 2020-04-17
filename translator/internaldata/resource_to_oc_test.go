@@ -16,72 +16,52 @@ package internaldata
 
 import (
 	"testing"
-	"time"
 
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
+	agenttracepb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/trace/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
-	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 )
 
 func TestResourceToOC(t *testing.T) {
-	ts, err := ptypes.TimestampProto(time.Date(2020, 2, 11, 20, 26, 0, 0, time.UTC))
-	assert.NoError(t, err)
+	emptyResource := pdata.NewResource()
+	emptyResource.InitEmpty()
 
-	ocAttributes := map[string]string{
-		"str1": "text",
-		"int2": "123",
-	}
-
-	resource := data.NewEmptyResource()
-	attrs := data.AttributesMap{
-		conventions.OCAttributeProcessStartTime: data.NewAttributeValueString("2020-02-11T20:26:00Z"),
-		conventions.AttributeHostHostname:       data.NewAttributeValueString("host1"),
-		conventions.OCAttributeProcessID:        data.NewAttributeValueString("123"),
-		conventions.AttributeLibraryVersion:     data.NewAttributeValueString("v2.0.1"),
-		conventions.OCAttributeExporterVersion:  data.NewAttributeValueString("v1.2.0"),
-		conventions.AttributeLibraryLanguage:    data.NewAttributeValueString("CPP"),
-		conventions.OCAttributeResourceType:     data.NewAttributeValueString("good-resource"),
-		"str1":                                  data.NewAttributeValueString("text"),
-		"int2":                                  data.NewAttributeValueInt(123),
-	}
-	resource.SetAttributes(data.NewAttributeMap(attrs))
+	ocNode := generateOcNode()
+	ocResource := generateOcResource()
+	// We don't differentiate between Node.Attributes and Resource when converting,
+	// and put everything in Resource.
+	ocResource.Labels["node-str-attr"] = "node-str-attr-val"
+	ocNode.Attributes = nil
 
 	tests := []struct {
 		name       string
-		resource   data.Resource
+		resource   pdata.Resource
 		ocNode     *occommon.Node
 		ocResource *ocresource.Resource
 	}{
 		{
+			name:       "nil",
+			resource:   pdata.NewResource(),
+			ocNode:     nil,
+			ocResource: nil,
+		},
+
+		{
 			name:       "empty",
-			resource:   data.NewEmptyResource(),
+			resource:   emptyResource,
 			ocNode:     &occommon.Node{},
 			ocResource: &ocresource.Resource{},
 		},
 
 		{
-			name:     "with-attributes",
-			resource: resource,
-			ocNode: &occommon.Node{
-				Identifier: &occommon.ProcessIdentifier{
-					HostName:       "host1",
-					Pid:            123,
-					StartTimestamp: ts,
-				},
-				LibraryInfo: &occommon.LibraryInfo{
-					Language:           occommon.LibraryInfo_CPP,
-					ExporterVersion:    "v1.2.0",
-					CoreLibraryVersion: "v2.0.1",
-				},
-			},
-			ocResource: &ocresource.Resource{
-				Type:   "good-resource",
-				Labels: ocAttributes,
-			},
+			name:       "with-attributes",
+			resource:   generateResourceWithOcNodeAndResource(),
+			ocNode:     ocNode,
+			ocResource: ocResource,
 		},
 	}
 
@@ -91,5 +71,33 @@ func TestResourceToOC(t *testing.T) {
 			assert.EqualValues(t, test.ocNode, ocNode)
 			assert.EqualValues(t, test.ocResource, ocResource)
 		})
+	}
+}
+
+func BenchmarkInternalResourceToOC(b *testing.B) {
+	resource := generateResourceWithOcNodeAndResource()
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		ocNode, _ := internalResourceToOC(resource)
+		if ocNode.Identifier.Pid != 123 {
+			b.Fail()
+		}
+	}
+}
+
+func BenchmarkOcResourceNodeMarshal(b *testing.B) {
+	oc := &agenttracepb.ExportTraceServiceRequest{
+		Node:     generateOcNode(),
+		Spans:    nil,
+		Resource: generateOcResource(),
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		buf := proto.Buffer{}
+		if err := buf.Marshal(oc); err != nil {
+			b.Fail()
+		}
 	}
 }

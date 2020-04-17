@@ -46,7 +46,7 @@ func TestSequentialTraceArrival(t *testing.T) {
 		ExpectedNewTracesPerSec: 64,
 		PolicyCfgs:              testPolicy,
 	}
-	sp, _ := NewTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporter{}, cfg)
+	sp, _ := newTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporterOld{}, cfg)
 	tsp := sp.(*tailSamplingSpanProcessor)
 	for _, batch := range batches {
 		tsp.ConsumeTraceData(context.Background(), batch)
@@ -70,7 +70,7 @@ func TestConcurrentTraceArrival(t *testing.T) {
 		ExpectedNewTracesPerSec: 64,
 		PolicyCfgs:              testPolicy,
 	}
-	sp, _ := NewTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporter{}, cfg)
+	sp, _ := newTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporterOld{}, cfg)
 	tsp := sp.(*tailSamplingSpanProcessor)
 	for _, batch := range batches {
 		// Add the same traceId twice.
@@ -106,7 +106,7 @@ func TestSequentialTraceMapSize(t *testing.T) {
 		ExpectedNewTracesPerSec: 64,
 		PolicyCfgs:              testPolicy,
 	}
-	sp, _ := NewTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporter{}, cfg)
+	sp, _ := newTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporterOld{}, cfg)
 	tsp := sp.(*tailSamplingSpanProcessor)
 	for _, batch := range batches {
 		tsp.ConsumeTraceData(context.Background(), batch)
@@ -129,7 +129,7 @@ func TestConcurrentTraceMapSize(t *testing.T) {
 		ExpectedNewTracesPerSec: 64,
 		PolicyCfgs:              testPolicy,
 	}
-	sp, _ := NewTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporter{}, cfg)
+	sp, _ := newTraceProcessor(zap.NewNop(), &exportertest.SinkTraceExporterOld{}, cfg)
 	tsp := sp.(*tailSamplingSpanProcessor)
 	for _, batch := range batches {
 		wg.Add(1)
@@ -321,11 +321,11 @@ func (p *mockSpanProcessor) GetCapabilities() component.ProcessorCapabilities {
 }
 
 // Start is invoked during service startup.
-func (p *mockSpanProcessor) Start(host component.Host) error {
+func (p *mockSpanProcessor) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 // Shutdown is invoked during service shutdown.
-func (p *mockSpanProcessor) Shutdown() error {
+func (p *mockSpanProcessor) Shutdown(context.Context) error {
 	return nil
 }

@@ -15,6 +15,7 @@
 package healthcheckextension
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"runtime"
@@ -25,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/extension/extensiontest"
+	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
 	"github.com/open-telemetry/opentelemetry-collector/testutils"
 )
 
@@ -38,9 +39,8 @@ func TestHealthCheckExtensionUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hcExt)
 
-	mh := extensiontest.NewMockHost()
-	require.NoError(t, hcExt.Start(mh))
-	defer hcExt.Shutdown()
+	require.NoError(t, hcExt.Start(context.Background(), componenttest.NewNopHost()))
+	defer hcExt.Shutdown(context.Background())
 
 	// Give a chance for the server goroutine to run.
 	runtime.Gosched()
@@ -88,10 +88,10 @@ func TestHealthCheckExtensionPortAlreadyInUse(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hcExt)
 
-	// Health check will report port already in use in a goroutine, use the mock
+	// Health check will report port already in use in a goroutine, use the error waiting
 	// host to get it.
-	mh := extensiontest.NewMockHost()
-	require.NoError(t, hcExt.Start(mh))
+	mh := componenttest.NewErrorWaitingHost()
+	require.NoError(t, hcExt.Start(context.Background(), mh))
 
 	receivedError, receivedErr := mh.WaitForFatalError(500 * time.Millisecond)
 	require.True(t, receivedError)
@@ -107,13 +107,13 @@ func TestHealthCheckMultipleStarts(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hcExt)
 
-	mh := extensiontest.NewMockHost()
-	require.NoError(t, hcExt.Start(mh))
-	defer hcExt.Shutdown()
+	mh := componenttest.NewErrorWaitingHost()
+	require.NoError(t, hcExt.Start(context.Background(), mh))
+	defer hcExt.Shutdown(context.Background())
 
-	// Health check will report already in use in a goroutine, use the mock
+	// Health check will report already in use in a goroutine, use the error waiting
 	// host to get it.
-	require.NoError(t, hcExt.Start(mh))
+	require.NoError(t, hcExt.Start(context.Background(), mh))
 
 	receivedError, receivedErr := mh.WaitForFatalError(500 * time.Millisecond)
 	require.True(t, receivedError)
@@ -129,11 +129,9 @@ func TestHealthCheckMultipleShutdowns(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hcExt)
 
-	mh := extensiontest.NewMockHost()
-	require.NoError(t, hcExt.Start(mh))
-
-	require.NoError(t, hcExt.Shutdown())
-	require.NoError(t, hcExt.Shutdown())
+	require.NoError(t, hcExt.Start(context.Background(), componenttest.NewNopHost()))
+	require.NoError(t, hcExt.Shutdown(context.Background()))
+	require.NoError(t, hcExt.Shutdown(context.Background()))
 }
 
 func TestHealthCheckShutdownWithoutStart(t *testing.T) {
@@ -145,5 +143,5 @@ func TestHealthCheckShutdownWithoutStart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hcExt)
 
-	require.NoError(t, hcExt.Shutdown())
+	require.NoError(t, hcExt.Shutdown(context.Background()))
 }

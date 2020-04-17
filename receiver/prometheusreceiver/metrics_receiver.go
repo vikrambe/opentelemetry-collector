@@ -52,9 +52,9 @@ func newPrometheusReceiver(logger *zap.Logger, cfg *Config, next consumer.Metric
 
 // Start is the method that starts Prometheus scraping and it
 // is controlled by having previously defined a Configuration using perhaps New.
-func (pr *Preceiver) Start(host component.Host) error {
+func (pr *Preceiver) Start(ctx context.Context, host component.Host) error {
 	pr.startOnce.Do(func() {
-		ctx := host.Context()
+		ctx := context.Background()
 		c, cancel := context.WithCancel(ctx)
 		pr.cancel = cancel
 		c = obsreport.ReceiverContext(c, pr.cfg.Name(), "http", pr.cfg.Name())
@@ -114,7 +114,7 @@ func (pr *Preceiver) Flush() {
 }
 
 // Shutdown stops and cancels the underlying Prometheus scrapers.
-func (pr *Preceiver) Shutdown() error {
+func (pr *Preceiver) Shutdown(context.Context) error {
 	pr.stopOnce.Do(pr.cancel)
 	return nil
 }

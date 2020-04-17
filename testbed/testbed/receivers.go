@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector/component"
+	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/jaegerreceiver"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/opencensusreceiver"
 	"github.com/open-telemetry/opentelemetry-collector/receiver/otlpreceiver"
@@ -50,12 +51,18 @@ type DataReceiverBase struct {
 	Port int
 }
 
-func (mb *DataReceiverBase) Context() context.Context {
-	return context.Background()
-}
-
 func (mb *DataReceiverBase) ReportFatalError(err error) {
 	log.Printf("Fatal error reported: %v", err)
+}
+
+// GetFactory of the specified kind. Returns the factory for a component type.
+func (mb *DataReceiverBase) GetFactory(kind component.Kind, componentType string) component.Factory {
+	return nil
+}
+
+// Return map of extensions. Only enabled and created extensions will be returned.
+func (mb *DataReceiverBase) GetExtensions() map[configmodels.Extension]component.ServiceExtension {
+	return nil
 }
 
 // OCDataReceiver implements OpenCensus format receiver.
@@ -83,11 +90,11 @@ func (or *OCDataReceiver) Start(tc *MockTraceConsumer, mc *MockMetricConsumer) e
 		return err
 	}
 
-	return or.receiver.Start(or)
+	return or.receiver.Start(context.Background(), or)
 }
 
 func (or *OCDataReceiver) Stop() {
-	or.receiver.Shutdown()
+	or.receiver.Shutdown(context.Background())
 }
 
 func (or *OCDataReceiver) GenConfigYAMLStr() string {
@@ -123,12 +130,12 @@ func (jr *JaegerDataReceiver) Start(tc *MockTraceConsumer, mc *MockMetricConsume
 		return err
 	}
 
-	return jr.receiver.Start(jr)
+	return jr.receiver.Start(context.Background(), jr)
 }
 
 func (jr *JaegerDataReceiver) Stop() {
 	if jr.receiver != nil {
-		if err := jr.receiver.Shutdown(); err != nil {
+		if err := jr.receiver.Shutdown(context.Background()); err != nil {
 			log.Printf("Cannot stop Jaeger receiver: %s", err.Error())
 		}
 	}
@@ -170,11 +177,11 @@ func (or *OTLPDataReceiver) Start(tc *MockTraceConsumer, mc *MockMetricConsumer)
 		return err
 	}
 
-	return or.receiver.Start(or)
+	return or.receiver.Start(context.Background(), or)
 }
 
 func (or *OTLPDataReceiver) Stop() {
-	or.receiver.Shutdown()
+	or.receiver.Shutdown(context.Background())
 }
 
 func (or *OTLPDataReceiver) GenConfigYAMLStr() string {

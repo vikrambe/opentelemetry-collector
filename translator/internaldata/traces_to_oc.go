@@ -21,8 +21,8 @@ import (
 	octrace "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
 
 	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 	"github.com/open-telemetry/opentelemetry-collector/internal"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
 	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
 	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
 )
@@ -33,7 +33,7 @@ var (
 	defaultProcessID = 0
 )
 
-func TraceDataToOC(td data.TraceData) []consumerdata.TraceData {
+func TraceDataToOC(td pdata.Traces) []consumerdata.TraceData {
 	resourceSpans := td.ResourceSpans()
 
 	if resourceSpans.Len() == 0 {
@@ -43,13 +43,17 @@ func TraceDataToOC(td data.TraceData) []consumerdata.TraceData {
 	ocResourceSpansList := make([]consumerdata.TraceData, 0, resourceSpans.Len())
 
 	for i := 0; i < resourceSpans.Len(); i++ {
-		ocResourceSpansList = append(ocResourceSpansList, ResourceSpansToOC(resourceSpans.Get(i)))
+		rs := resourceSpans.At(i)
+		if rs.IsNil() {
+			continue
+		}
+		ocResourceSpansList = append(ocResourceSpansList, ResourceSpansToOC(rs))
 	}
 
 	return ocResourceSpansList
 }
 
-func ResourceSpansToOC(rs data.ResourceSpans) consumerdata.TraceData {
+func ResourceSpansToOC(rs pdata.ResourceSpans) consumerdata.TraceData {
 	ocTraceData := consumerdata.TraceData{
 		SourceFormat: sourceFormat,
 	}
@@ -58,21 +62,29 @@ func ResourceSpansToOC(rs data.ResourceSpans) consumerdata.TraceData {
 	if ilss.Len() == 0 {
 		return ocTraceData
 	}
-	// Approximate the number of the metrics as the number of the metrics in the first
+	// Approximate the number of the spans as the number of the spans in the first
 	// instrumentation library info.
-	ocSpans := make([]*octrace.Span, 0, ilss.Get(0).Spans().Len())
+	ocSpans := make([]*octrace.Span, 0, ilss.At(0).Spans().Len())
 	for i := 0; i < ilss.Len(); i++ {
+		ils := ilss.At(i)
+		if ils.IsNil() {
+			continue
+		}
 		// TODO: Handle instrumentation library name and version.
-		spans := ilss.Get(i).Spans()
+		spans := ils.Spans()
 		for j := 0; j < spans.Len(); j++ {
-			ocSpans = append(ocSpans, spanToOC(spans.Get(j)))
+			span := spans.At(j)
+			if span.IsNil() {
+				continue
+			}
+			ocSpans = append(ocSpans, spanToOC(span))
 		}
 	}
 	ocTraceData.Spans = ocSpans
 	return ocTraceData
 }
 
-func spanToOC(span data.Span) *octrace.Span {
+func spanToOC(span pdata.Span) *octrace.Span {
 	attributes := attributesMapToOCSpanAttributes(span.Attributes(), span.DroppedAttributesCount())
 	if kindAttr := spanKindToOCAttribute(span.Kind()); kindAttr != nil {
 		if attributes == nil {
@@ -103,8 +115,8 @@ func spanToOC(span data.Span) *octrace.Span {
 	}
 }
 
-func attributesMapToOCSpanAttributes(attributes data.AttributeMap, droppedCount uint32) *octrace.Span_Attributes {
-	if attributes.Len() == 0 && droppedCount == 0 {
+func attributesMapToOCSpanAttributes(attributes pdata.AttributeMap, droppedCount uint32) *octrace.Span_Attributes {
+	if attributes.Cap() == 0 && droppedCount == 0 {
 		return nil
 	}
 
@@ -114,38 +126,37 @@ func attributesMapToOCSpanAttributes(attributes data.AttributeMap, droppedCount 
 	}
 }
 
-func attributesMapToOCAttributeMap(attributes data.AttributeMap) map[string]*octrace.AttributeValue {
-	if attributes.Len() == 0 {
+func attributesMapToOCAttributeMap(attributes pdata.AttributeMap) map[string]*octrace.AttributeValue {
+	if attributes.Cap() == 0 {
 		return nil
 	}
 
-	ocAttributes := make(map[string]*octrace.AttributeValue, attributes.Len())
-	for i := 0; i < attributes.Len(); i++ {
-		attr := attributes.GetAttribute(i)
-		ocAttributes[attr.Key()] = attributeValueToOC(attr.Value())
-	}
+	ocAttributes := make(map[string]*octrace.AttributeValue, attributes.Cap())
+	attributes.ForEach(func(k string, v pdata.AttributeValue) {
+		ocAttributes[k] = attributeValueToOC(v)
+	})
 	return ocAttributes
 }
 
-func attributeValueToOC(attr data.AttributeValue) *octrace.AttributeValue {
+func attributeValueToOC(attr pdata.AttributeValue) *octrace.AttributeValue {
 	a := &octrace.AttributeValue{}
 
 	switch attr.Type() {
-	case data.AttributeValueSTRING:
+	case pdata.AttributeValueSTRING:
 		a.Value = &octrace.AttributeValue_StringValue{
 			StringValue: &octrace.TruncatableString{
 				Value: attr.StringVal(),
 			},
 		}
-	case data.AttributeValueBOOL:
+	case pdata.AttributeValueBOOL:
 		a.Value = &octrace.AttributeValue_BoolValue{
 			BoolValue: attr.BoolVal(),
 		}
-	case data.AttributeValueDOUBLE:
+	case pdata.AttributeValueDOUBLE:
 		a.Value = &octrace.AttributeValue_DoubleValue{
 			DoubleValue: attr.DoubleVal(),
 		}
-	case data.AttributeValueINT:
+	case pdata.AttributeValueINT:
 		a.Value = &octrace.AttributeValue_IntValue{
 			IntValue: attr.IntVal(),
 		}
@@ -160,17 +171,17 @@ func attributeValueToOC(attr data.AttributeValue) *octrace.AttributeValue {
 	return a
 }
 
-func spanKindToOCAttribute(kind data.SpanKind) *octrace.AttributeValue {
+func spanKindToOCAttribute(kind pdata.SpanKind) *octrace.AttributeValue {
 	var ocKind tracetranslator.OpenTracingSpanKind
 	switch kind {
-	case data.SpanKindCONSUMER:
+	case pdata.SpanKindCONSUMER:
 		ocKind = tracetranslator.OpenTracingSpanKindConsumer
-	case data.SpanKindPRODUCER:
+	case pdata.SpanKindPRODUCER:
 		ocKind = tracetranslator.OpenTracingSpanKindProducer
-	case data.SpanKindUNSPECIFIED:
-	case data.SpanKindINTERNAL:
-	case data.SpanKindSERVER: // explicitly handled as SpanKind
-	case data.SpanKindCLIENT: // explicitly handled as SpanKind
+	case pdata.SpanKindUNSPECIFIED:
+	case pdata.SpanKindINTERNAL:
+	case pdata.SpanKindSERVER: // explicitly handled as SpanKind
+	case pdata.SpanKindCLIENT: // explicitly handled as SpanKind
 	default:
 
 	}
@@ -194,7 +205,7 @@ func stringAttributeValue(val string) *octrace.AttributeValue {
 }
 
 // OTLP follows the W3C format, e.g. "vendorname1=opaqueValue1,vendorname2=opaqueValue2"
-func traceStateToOC(traceState data.TraceState) *octrace.Span_Tracestate {
+func traceStateToOC(traceState pdata.TraceState) *octrace.Span_Tracestate {
 	if traceState == "" {
 		return nil
 	}
@@ -226,24 +237,24 @@ func traceStateToOC(traceState data.TraceState) *octrace.Span_Tracestate {
 	}
 }
 
-func spanKindToOC(kind data.SpanKind) octrace.Span_SpanKind {
+func spanKindToOC(kind pdata.SpanKind) octrace.Span_SpanKind {
 	switch kind {
-	case data.SpanKindSERVER:
+	case pdata.SpanKindSERVER:
 		return octrace.Span_SERVER
-	case data.SpanKindCLIENT:
+	case pdata.SpanKindCLIENT:
 		return octrace.Span_CLIENT
 	// NOTE: see `spanKindToOCAttribute` function for custom kinds
-	case data.SpanKindUNSPECIFIED:
-	case data.SpanKindINTERNAL:
-	case data.SpanKindPRODUCER:
-	case data.SpanKindCONSUMER:
+	case pdata.SpanKindUNSPECIFIED:
+	case pdata.SpanKindINTERNAL:
+	case pdata.SpanKindPRODUCER:
+	case pdata.SpanKindCONSUMER:
 	default:
 	}
 
 	return octrace.Span_SPAN_KIND_UNSPECIFIED
 }
 
-func eventsToOC(events data.SpanEventSlice, droppedCount uint32) *octrace.Span_TimeEvents {
+func eventsToOC(events pdata.SpanEventSlice, droppedCount uint32) *octrace.Span_TimeEvents {
 	if events.Len() == 0 {
 		if droppedCount == 0 {
 			return nil
@@ -256,7 +267,7 @@ func eventsToOC(events data.SpanEventSlice, droppedCount uint32) *octrace.Span_T
 
 	ocEvents := make([]*octrace.Span_TimeEvent, 0, events.Len())
 	for i := 0; i < events.Len(); i++ {
-		ocEvents = append(ocEvents, eventToOC(events.Get(i)))
+		ocEvents = append(ocEvents, eventToOC(events.At(i)))
 	}
 
 	return &octrace.Span_TimeEvents{
@@ -265,7 +276,7 @@ func eventsToOC(events data.SpanEventSlice, droppedCount uint32) *octrace.Span_T
 	}
 }
 
-func eventToOC(event data.SpanEvent) *octrace.Span_TimeEvent {
+func eventToOC(event pdata.SpanEvent) *octrace.Span_TimeEvent {
 	attrs := event.Attributes()
 
 	// Consider TimeEvent to be of MessageEvent type if all and only relevant attributes are set
@@ -275,15 +286,16 @@ func eventToOC(event data.SpanEvent) *octrace.Span_TimeEvent {
 		conventions.OCTimeEventMessageEventUSize,
 		conventions.OCTimeEventMessageEventCSize,
 	}
-	if attrs.Len() == len(ocMessageEventAttrs) {
-		ocMessageEventAttrValues := map[string]data.AttributeValue{}
+	// TODO: Find a better way to check for message_event. Maybe use the event.Name.
+	if attrs.Cap() == len(ocMessageEventAttrs) {
+		ocMessageEventAttrValues := map[string]pdata.AttributeValue{}
 		var ocMessageEventAttrFound bool
 		for _, attr := range ocMessageEventAttrs {
 			akv, found := attrs.Get(attr)
 			if found {
 				ocMessageEventAttrFound = true
 			}
-			ocMessageEventAttrValues[attr] = akv.Value()
+			ocMessageEventAttrValues[attr] = akv
 		}
 		if ocMessageEventAttrFound {
 			ocMessageEventType := ocMessageEventAttrValues[conventions.OCTimeEventMessageEventType]
@@ -316,7 +328,7 @@ func eventToOC(event data.SpanEvent) *octrace.Span_TimeEvent {
 	}
 }
 
-func linksToOC(links data.SpanLinkSlice, droppedCount uint32) *octrace.Span_Links {
+func linksToOC(links pdata.SpanLinkSlice, droppedCount uint32) *octrace.Span_Links {
 	if links.Len() == 0 {
 		if droppedCount == 0 {
 			return nil
@@ -329,7 +341,7 @@ func linksToOC(links data.SpanLinkSlice, droppedCount uint32) *octrace.Span_Link
 
 	ocLinks := make([]*octrace.Span_Link, 0, links.Len())
 	for i := 0; i < links.Len(); i++ {
-		link := links.Get(i)
+		link := links.At(i)
 		ocLink := &octrace.Span_Link{
 			TraceId:    link.TraceID().Bytes(),
 			SpanId:     link.SpanID().Bytes(),
@@ -345,7 +357,7 @@ func linksToOC(links data.SpanLinkSlice, droppedCount uint32) *octrace.Span_Link
 	}
 }
 
-func statusToOC(status data.SpanStatus) *octrace.Status {
+func statusToOC(status pdata.SpanStatus) *octrace.Status {
 	if status.IsNil() {
 		return nil
 	}

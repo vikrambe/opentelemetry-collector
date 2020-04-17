@@ -17,6 +17,8 @@ package data
 import (
 	"github.com/golang/protobuf/proto"
 	otlpmetrics "github.com/open-telemetry/opentelemetry-proto/gen/go/metrics/v1"
+
+	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
 )
 
 // This file defines in-memory data structures to represent metrics.
@@ -61,12 +63,8 @@ func (md MetricData) Clone() MetricData {
 	return MetricDataFromOtlp(resourceMetricsClones)
 }
 
-func (md MetricData) ResourceMetrics() ResourceMetricsSlice {
-	return newResourceMetricsSlice(md.orig)
-}
-
-func (md MetricData) SetResourceMetrics(v ResourceMetricsSlice) {
-	*md.orig = *v.orig
+func (md MetricData) ResourceMetrics() pdata.ResourceMetricsSlice {
+	return pdata.InternalNewMetricsResourceSlice(md.orig)
 }
 
 // MetricCount calculates the total number of metrics.
@@ -74,23 +72,48 @@ func (md MetricData) MetricCount() int {
 	metricCount := 0
 	rms := md.ResourceMetrics()
 	for i := 0; i < rms.Len(); i++ {
-		ils := rms.Get(i).InstrumentationLibraryMetrics()
-		for j := 0; j < ils.Len(); j++ {
-			metricCount += ils.Get(j).Metrics().Len()
+		rm := rms.At(i)
+		if rm.IsNil() {
+			continue
+		}
+		ilms := rm.InstrumentationLibraryMetrics()
+		for j := 0; j < ilms.Len(); j++ {
+			ilm := ilms.At(j)
+			if ilm.IsNil() {
+				continue
+			}
+			metricCount += ilm.Metrics().Len()
 		}
 	}
 	return metricCount
 }
 
-type MetricType otlpmetrics.MetricDescriptor_Type
-
-const (
-	MetricTypeUnspecified         MetricType = MetricType(otlpmetrics.MetricDescriptor_UNSPECIFIED)
-	MetricTypeGaugeInt64          MetricType = MetricType(otlpmetrics.MetricDescriptor_GAUGE_INT64)
-	MetricTypeGaugeDouble         MetricType = MetricType(otlpmetrics.MetricDescriptor_GAUGE_DOUBLE)
-	MetricTypeGaugeHistogram      MetricType = MetricType(otlpmetrics.MetricDescriptor_GAUGE_HISTOGRAM)
-	MetricTypeCounterInt64        MetricType = MetricType(otlpmetrics.MetricDescriptor_COUNTER_INT64)
-	MetricTypeCounterDouble       MetricType = MetricType(otlpmetrics.MetricDescriptor_COUNTER_DOUBLE)
-	MetricTypeCumulativeHistogram MetricType = MetricType(otlpmetrics.MetricDescriptor_CUMULATIVE_HISTOGRAM)
-	MetricTypeSummary             MetricType = MetricType(otlpmetrics.MetricDescriptor_SUMMARY)
-)
+// MetricAndDataPointCount calculates the total number of metrics and data points.
+func (md MetricData) MetricAndDataPointCount() (metricCount int, dataPointCount int) {
+	rms := md.ResourceMetrics()
+	for i := 0; i < rms.Len(); i++ {
+		rm := rms.At(i)
+		if rm.IsNil() {
+			continue
+		}
+		ilms := rm.InstrumentationLibraryMetrics()
+		for j := 0; j < ilms.Len(); j++ {
+			ilm := ilms.At(j)
+			if ilm.IsNil() {
+				continue
+			}
+			metrics := ilm.Metrics()
+			metricCount += metrics.Len()
+			ms := ilm.Metrics()
+			for k := 0; k < ms.Len(); k++ {
+				m := ms.At(k)
+				if m.IsNil() {
+					continue
+				}
+				dataPointCount += m.Int64DataPoints().Len() + m.DoubleDataPoints().Len() +
+					m.HistogramDataPoints().Len() + m.SummaryDataPoints().Len()
+			}
+		}
+	}
+	return
+}

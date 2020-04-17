@@ -19,7 +19,6 @@ require (
 	github.com/golang/protobuf v1.3.5
 	github.com/golangci/golangci-lint v1.24.0
 	github.com/google/addlicense v0.0.0-20200301095109-7c013a14f2e2
-	github.com/google/go-cmp v0.4.0
 	github.com/google/uuid v1.1.1
 	github.com/gorilla/handlers v1.4.2 // indirect
 	github.com/gorilla/mux v1.7.3
@@ -50,19 +49,17 @@ require (
 	github.com/spf13/viper v1.6.2
 	github.com/streadway/quantile v0.0.0-20150917103942-b0c588724d25 // indirect
 	github.com/stretchr/testify v1.4.0
-	github.com/tcnksm/ghr v0.13.0 // indirect
+	github.com/tcnksm/ghr v0.13.0
 	github.com/uber-go/atomic v1.4.0 // indirect
 	github.com/uber/jaeger-lib v2.2.0+incompatible
-	github.com/uber/tchannel-go v1.10.0
+	github.com/uber/tchannel-go v1.10.0 // indirect
 	go.opencensus.io v0.22.3
 	go.uber.org/zap v1.10.0
-	golang.org/x/sys v0.0.0-20200327173247-9dae0f8f5775
+	golang.org/x/net v0.0.0-20200324143707-d3edc9973b7e // indirect
+	golang.org/x/sys v0.0.0-20200408040146-ea54a3c99b9b
 	google.golang.org/api v0.10.0 // indirect
-	google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55
-	google.golang.org/grpc v1.23.0
+	google.golang.org/genproto v0.0.0-20200408120641-fbb3ad325eb7
+	google.golang.org/grpc v1.28.1
 	gopkg.in/yaml.v2 v2.2.8
 	honnef.co/go/tools v0.0.1-2020.1.3
-	k8s.io/client-go v12.0.0+incompatible // indirect
 )
-
-replace k8s.io/client-go => k8s.io/client-go v0.0.0-20190620085101-78d2af792bab

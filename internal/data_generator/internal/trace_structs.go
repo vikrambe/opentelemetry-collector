@@ -17,8 +17,6 @@ package internal
 var traceFile = &File{
 	Name: "trace",
 	imports: []string{
-		`otlpcommon "github.com/open-telemetry/opentelemetry-proto/gen/go/common/v1"`,
-		`otlpresource "github.com/open-telemetry/opentelemetry-proto/gen/go/resource/v1"`,
 		`otlptrace "github.com/open-telemetry/opentelemetry-proto/gen/go/trace/v1"`,
 	},
 	testImports: []string{
@@ -54,10 +52,9 @@ var resourceSpans = &messageStruct{
 	fields: []baseField{
 		resourceField,
 		&sliceField{
-			fieldMame:               "InstrumentationLibrarySpans",
-			originFieldName:         "InstrumentationLibrarySpans",
-			returnSlice:             instrumentationLibrarySpansSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "InstrumentationLibrarySpans",
+			originFieldName: "InstrumentationLibrarySpans",
+			returnSlice:     instrumentationLibrarySpansSlice,
 		},
 	},
 }
@@ -74,10 +71,9 @@ var instrumentationLibrarySpans = &messageStruct{
 	fields: []baseField{
 		instrumentationLibraryField,
 		&sliceField{
-			fieldMame:               "Spans",
-			originFieldName:         "Spans",
-			returnSlice:             spanSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Spans",
+			originFieldName: "Spans",
+			returnSlice:     spanSlice,
 		},
 	},
 }
@@ -111,10 +107,9 @@ var span = &messageStruct{
 		attributes,
 		droppedAttributesCount,
 		&sliceField{
-			fieldMame:               "Events",
-			originFieldName:         "Events",
-			returnSlice:             spanEventSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Events",
+			originFieldName: "Events",
+			returnSlice:     spanEventSlice,
 		},
 		&primitiveField{
 			fieldMame:       "DroppedEventsCount",
@@ -124,10 +119,9 @@ var span = &messageStruct{
 			testVal:         "uint32(17)",
 		},
 		&sliceField{
-			fieldMame:               "Links",
-			originFieldName:         "Links",
-			returnSlice:             spanLinkSlice,
-			constructorDefaultValue: "0",
+			fieldMame:       "Links",
+			originFieldName: "Links",
+			returnSlice:     spanLinkSlice,
 		},
 		&primitiveField{
 			fieldMame:       "DroppedLinksCount",

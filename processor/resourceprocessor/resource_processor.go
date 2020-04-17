@@ -55,12 +55,12 @@ func (rtp *resourceTraceProcessor) GetCapabilities() component.ProcessorCapabili
 }
 
 // Start is invoked during service startup.
-func (*resourceTraceProcessor) Start(host component.Host) error {
+func (*resourceTraceProcessor) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 // Shutdown is invoked during service shutdown.
-func (*resourceTraceProcessor) Shutdown() error {
+func (*resourceTraceProcessor) Shutdown(context.Context) error {
 	return nil
 }
 
@@ -85,12 +85,12 @@ func (rmp *resourceMetricProcessor) GetCapabilities() component.ProcessorCapabil
 }
 
 // Start is invoked during service startup.
-func (*resourceMetricProcessor) Start(host component.Host) error {
+func (*resourceMetricProcessor) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 // Shutdown is invoked during service shutdown.
-func (*resourceMetricProcessor) Shutdown() error {
+func (*resourceMetricProcessor) Shutdown(context.Context) error {
 	return nil
 }
 
@@ -119,9 +119,16 @@ func mergeResource(to, from *resourcepb.Resource) *resourcepb.Resource {
 		return to
 	}
 	if to == nil {
+		if from.Type == "" {
+			// Since resource without type would be invalid, we keep resource as nil
+			return nil
+		}
 		to = &resourcepb.Resource{Labels: map[string]string{}}
 	}
-	to.Type = from.Type
+	if from.Type != "" {
+		// Only change resource type if it was configured
+		to.Type = from.Type
+	}
 	if from.Labels != nil {
 		for k, v := range from.Labels {
 			to.Labels[k] = v
