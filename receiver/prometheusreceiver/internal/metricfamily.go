@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,11 +19,11 @@ import (
 	"strings"
 
 	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
-	"github.com/golang/protobuf/ptypes/timestamp"
-	"github.com/golang/protobuf/ptypes/wrappers"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/textparse"
 	"github.com/prometheus/prometheus/scrape"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // MetricFamily is unit which is corresponding to the metrics items which shared the same TYPE/UNIT/... metadata from
@@ -155,16 +155,17 @@ func (mf *metricFamily) Add(metricName string, ls labels.Labels, t int64, v floa
 	case metricspb.MetricDescriptor_CUMULATIVE_DISTRIBUTION:
 		fallthrough
 	case metricspb.MetricDescriptor_SUMMARY:
-		if strings.HasSuffix(metricName, metricsSuffixSum) {
+		switch {
+		case strings.HasSuffix(metricName, metricsSuffixSum):
 			// always use the timestamp from sum (count is ok too), because the startTs from quantiles won't be reliable
 			// in cases like remote server restart
 			mg.ts = t
 			mg.sum = v
 			mg.hasSum = true
-		} else if strings.HasSuffix(metricName, metricsSuffixCount) {
+		case strings.HasSuffix(metricName, metricsSuffixCount):
 			mg.count = v
 			mg.hasCount = true
-		} else {
+		default:
 			boundary, err := getBoundary(mf.mtype, ls)
 			if err != nil {
 				mf.droppedTimeseries++
@@ -183,7 +184,7 @@ func (mf *metricFamily) ToMetric() (*metricspb.Metric, int, int) {
 	timeseries := make([]*metricspb.TimeSeries, 0, len(mf.groups))
 	switch mf.mtype {
 	// not supported currently
-	//case metricspb.MetricDescriptor_GAUGE_DISTRIBUTION:
+	// case metricspb.MetricDescriptor_GAUGE_DISTRIBUTION:
 	//	return nil
 	case metricspb.MetricDescriptor_CUMULATIVE_DISTRIBUTION:
 		for _, mg := range mf.getGroups() {
@@ -334,8 +335,8 @@ func (mg *metricGroup) toSummaryTimeSeries(orderedLabelKeys []string) *metricspb
 	// at the global level of the metricspb.SummaryValue
 
 	summaryValue := &metricspb.SummaryValue{
-		Sum:      &wrappers.DoubleValue{Value: mg.sum},
-		Count:    &wrappers.Int64Value{Value: int64(mg.count)},
+		Sum:      &wrapperspb.DoubleValue{Value: mg.sum},
+		Count:    &wrapperspb.Int64Value{Value: int64(mg.count)},
 		Snapshot: snapshot,
 	}
 	return &metricspb.TimeSeries{
@@ -348,7 +349,7 @@ func (mg *metricGroup) toSummaryTimeSeries(orderedLabelKeys []string) *metricspb
 }
 
 func (mg *metricGroup) toDoubleValueTimeSeries(orderedLabelKeys []string) *metricspb.TimeSeries {
-	var startTs *timestamp.Timestamp
+	var startTs *timestamppb.Timestamp
 	// gauge/undefined types has no start time
 	if mg.family.isCumulativeType() {
 		startTs = timestampFromMs(mg.ts)

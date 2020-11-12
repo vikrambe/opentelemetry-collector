@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,21 +21,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
-	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configcheck"
+	"go.opentelemetry.io/collector/config/configerror"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/processor/processorhelper"
 )
 
 func TestFactory_Type(t *testing.T) {
-	factory := Factory{}
-	assert.Equal(t, factory.Type(), typeStr)
+	factory := NewFactory()
+	assert.Equal(t, factory.Type(), configmodels.Type(typeStr))
 }
 
 func TestFactory_CreateDefaultConfig(t *testing.T) {
-	factory := Factory{}
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	assert.Equal(t, cfg, &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
@@ -46,126 +46,104 @@ func TestFactory_CreateDefaultConfig(t *testing.T) {
 	assert.NoError(t, configcheck.ValidateConfig(cfg))
 }
 
-func TestFactory_CreateTraceProcessor(t *testing.T) {
-	factory := Factory{}
+func TestFactoryCreateTraceProcessor_EmptyActions(t *testing.T) {
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig()
+	ap, err := factory.CreateTracesProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewTracesNop())
+	assert.Error(t, err)
+	assert.Nil(t, ap)
+}
+
+func TestFactoryCreateTraceProcessor_InvalidActions(t *testing.T) {
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	oCfg := cfg.(*Config)
-	oCfg.Actions = []ActionKeyValue{
-		{Key: "a key", Action: DELETE},
+	// Missing key
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Key: "", Value: 123, Action: processorhelper.UPSERT},
+	}
+	ap, err := factory.CreateTracesProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewTracesNop())
+	assert.Error(t, err)
+	assert.Nil(t, ap)
+}
+
+func TestFactoryCreateTraceProcessor(t *testing.T) {
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig()
+	oCfg := cfg.(*Config)
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Key: "a key", Action: processorhelper.DELETE},
 	}
 
-	tp, err := factory.CreateTraceProcessor(
-		context.Background(), component.ProcessorCreateParams{}, exportertest.NewNopTraceExporter(), cfg)
+	tp, err := factory.CreateTracesProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewTracesNop())
 	assert.NotNil(t, tp)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
-	tp, err = factory.CreateTraceProcessor(
-		context.Background(), component.ProcessorCreateParams{}, nil, cfg)
+	tp, err = factory.CreateTracesProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, nil)
 	assert.Nil(t, tp)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 
-	oCfg.Actions = []ActionKeyValue{
-		{Action: DELETE},
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Action: processorhelper.DELETE},
 	}
-	tp, err = factory.CreateTraceProcessor(
-		context.Background(), component.ProcessorCreateParams{}, exportertest.NewNopTraceExporter(), cfg)
+	tp, err = factory.CreateTracesProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewTracesNop())
 	assert.Nil(t, tp)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestFactory_CreateMetricsProcessor(t *testing.T) {
-	factory := Factory{}
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 
-	mp, err := factory.CreateMetricsProcessor(
-		context.Background(), component.ProcessorCreateParams{}, nil, cfg)
+	mp, err := factory.CreateMetricsProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, nil)
 	require.Nil(t, mp)
 	assert.Equal(t, err, configerror.ErrDataTypeIsNotSupported)
 }
 
-func TestFactory_validateActionsConfiguration(t *testing.T) {
-	factory := Factory{}
+func TestFactoryCreateLogsProcessor_EmptyActions(t *testing.T) {
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
-	oCfg := cfg.(*Config)
-
-	oCfg.Actions = []ActionKeyValue{
-		{Key: "one", Action: "Delete"},
-		{Key: "two", Value: 123, Action: "INSERT"},
-		{Key: "three", FromAttribute: "two", Action: "upDaTE"},
-		{Key: "five", FromAttribute: "two", Action: "upsert"},
-	}
-	output, err := buildAttributesConfiguration(*oCfg)
-	require.NoError(t, err)
-	av := pdata.NewAttributeValueInt(123)
-	assert.Equal(t, []attributeAction{
-		{Key: "one", Action: DELETE},
-		{Key: "two", Action: INSERT,
-			AttributeValue: &av,
-		},
-		{Key: "three", FromAttribute: "two", Action: UPDATE},
-		{Key: "five", FromAttribute: "two", Action: UPSERT},
-	}, output)
-
+	ap, err := factory.CreateLogsProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewLogsNop())
+	assert.Error(t, err)
+	assert.Nil(t, ap)
 }
 
-func TestFactory_validateActionsConfiguration_InvalidConfig(t *testing.T) {
-	testcase := []struct {
-		name        string
-		actionLists []ActionKeyValue
-		errorString string
-	}{
-		{
-			name:        "empty action lists",
-			actionLists: []ActionKeyValue{},
-			errorString: "error creating \"attributes\" processor due to missing required field \"actions\" of processor \"attributes/error\"",
-		},
-		{
-			name: "missing key",
-			actionLists: []ActionKeyValue{
-				{Key: "one", Action: DELETE},
-				{Key: "", Value: 123, Action: UPSERT},
-			},
-			errorString: "error creating \"attributes\" processor due to missing required field \"key\" at the 1-th actions of processor \"attributes/error\"",
-		},
-		{
-			name: "invalid action",
-			actionLists: []ActionKeyValue{
-				{Key: "invalid", Action: "invalid"},
-			},
-			errorString: "error creating \"attributes\" processor due to unsupported action \"invalid\" at the 0-th actions of processor \"attributes/error\"",
-		},
-		{
-			name: "unsupported value",
-			actionLists: []ActionKeyValue{
-				{Key: "UnsupportedValue", Value: []int{}, Action: UPSERT},
-			},
-			errorString: "error unsupported value type \"[]int\"",
-		},
-		{
-			name: "missing value or from attribute",
-			actionLists: []ActionKeyValue{
-				{Key: "MissingValueFromAttributes", Action: INSERT},
-			},
-			errorString: "error creating \"attributes\" processor. Either field \"value\" or \"from_attribute\" setting must be specified for 0-th action of processor \"attributes/error\"",
-		},
-		{
-			name: "both set value and from attribute",
-			actionLists: []ActionKeyValue{
-				{Key: "BothSet", Value: 123, FromAttribute: "aa", Action: UPSERT},
-			},
-			errorString: "error creating \"attributes\" processor due to both fields \"value\" and \"from_attribute\" being set at the 0-th actions of processor \"attributes/error\"",
-		},
-	}
-	factory := Factory{}
+func TestFactoryCreateLogsProcessor_InvalidActions(t *testing.T) {
+	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	oCfg := cfg.(*Config)
-	oCfg.NameVal = "attributes/error"
-	for _, tc := range testcase {
-		t.Run(tc.name, func(t *testing.T) {
-			oCfg.Actions = tc.actionLists
-			output, err := buildAttributesConfiguration(*oCfg)
-			assert.Nil(t, output)
-			assert.Error(t, err)
-		})
+	// Missing key
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Key: "", Value: 123, Action: processorhelper.UPSERT},
 	}
+	ap, err := factory.CreateLogsProcessor(context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewLogsNop())
+	assert.Error(t, err)
+	assert.Nil(t, ap)
+}
+
+func TestFactoryCreateLogsProcessor(t *testing.T) {
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig()
+	oCfg := cfg.(*Config)
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Key: "a key", Action: processorhelper.DELETE},
+	}
+
+	tp, err := factory.CreateLogsProcessor(
+		context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewLogsNop())
+	assert.NotNil(t, tp)
+	assert.NoError(t, err)
+
+	tp, err = factory.CreateLogsProcessor(
+		context.Background(), component.ProcessorCreateParams{}, cfg, nil)
+	assert.Nil(t, tp)
+	assert.Error(t, err)
+
+	oCfg.Actions = []processorhelper.ActionKeyValue{
+		{Action: processorhelper.DELETE},
+	}
+	tp, err = factory.CreateLogsProcessor(
+		context.Background(), component.ProcessorCreateParams{}, cfg, consumertest.NewLogsNop())
+	assert.Nil(t, tp)
+	assert.Error(t, err)
 }

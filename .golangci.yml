@@ -75,7 +75,7 @@ linters-settings:
   goimports:
     # put imports beginning with prefix after 3rd-party packages;
     # it's a comma-separated list of prefixes
-    local-prefixes: github.com/open-telemetry/opentelemetry-collector
+    local-prefixes: go.opentelemetry.io/collector
   misspell:
     # Correct spellings using locale preferences for US or UK.
     # Default is to use a neutral variety of English.
@@ -90,7 +90,8 @@ linters-settings:
       - kilometres
 
 linters:
-  disable-all: true
+  disable:
+    - errcheck
   enable:
     - gofmt
     - goimports
@@ -99,6 +100,9 @@ linters:
     - staticcheck
     - misspell
     - scopelint
+    - unconvert
+    - gocritic
+    - unparam
 
 issues:
   # Excluding configuration per-path, per-linter, per-text and per-source
@@ -107,3 +111,11 @@ issues:
     - path: _test\.go
       linters:
         - scopelint
+    - path: otlp_test.go
+      linters:
+        # See https://github.com/golangci/golangci-lint/issues/537#issuecomment-545170007
+        - structcheck
+    - path: receiver/otlpreceiver/marshal_jsonpb\.go
+      linters:
+        - gocritic
+        - gosimple

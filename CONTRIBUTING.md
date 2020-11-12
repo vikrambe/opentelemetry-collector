@@ -2,6 +2,27 @@
 
 We'd love your help!
 
+## How to structure PRs to get expedient reviews?
+
+We recommend that any PR (unless it is trivial) to be smaller than 500 lines (excluding go mod/sum changes) in order to help reviewers to do a thorough and reasonably fast reviews.
+
+### When adding a new component
+
+Consider submitting different PRs for (more details about adding new components [here](#adding-new-components)) :
+
+* First PR should include the overall structure of the new component:
+  * Readme, configuration, and factory implementation usually using the helper factory structs.
+  * This PR is usually trivial to review, so the size limit does not apply to it.
+* Second PR should include the concrete implementation of the component.
+If the size of this PR is larger than the recommended size consider splitting it in multiple PRs.
+* Last PR should enable the new component and add it to the `otelcontribcol` binary by updating the `components.go` file.
+The component must be enabled only after sufficient testing, and there is enough confidence in the stability and quality of the component.
+
+### Refactoring Work
+
+Any refactoring work must be split in its own PR that does not include any behavior changes.
+It is important to do this to avoid hidden changes in large and trivial refactoring PRs.
+
 ## Report a bug or requesting feature
 
 Reporting bugs is an important contribution. Please make sure to include:
@@ -27,7 +48,7 @@ Select a good issue from the links below (ordered by difficulty/complexity):
 Comment on the issue that you want to work on so we can assign it to you and
 clarify anything related to it.
 
-If you would like to work on something that is not listed as an issue 
+If you would like to work on something that is not listed as an issue
 (e.g. a new feature or enhancement) please first read our [vision](docs/vision.md) and
 [roadmap](docs/roadmap.md) to make sure your proposal aligns with the goals of the
 Collector, then create an issue and describe your proposal. It is best to do this
@@ -82,19 +103,19 @@ Working with the project sources requires the following tools:
 Fork the repo, checkout the upstream repo to your GOPATH by:
 
 ```
-$ GO111MODULE="" go get -d github.com/open-telemetry/opentelemetry-collector
+$ GO111MODULE="" go get -d go.opentelemetry.io/collector
 ```
 
 Add your fork as an origin:
 
 ```shell
-$ cd $(go env GOPATH)/src/github.com/open-telemetry/opentelemetry-collector
+$ cd $(go env GOPATH)/src/go.opentelemetry.io/collector
 $ git remote add fork git@github.com:YOUR_GITHUB_USERNAME/opentelemetry-service.git
 ```
 
 Run tests, fmt and lint:
 
-```shell 
+```shell
 $ make install-tools # Only first time.
 $ make
 ```
@@ -110,6 +131,7 @@ to open a new PR:
 $ git checkout -b feature
 # edit
 $ make
+$ make fmt
 $ git commit
 $ git push fork feature
 ```
@@ -149,9 +171,9 @@ exit cleanly with a process exit code.
 ### Propagate Errors to the Caller
 
 Do not crash or exit outside the `main()` function, e.g. via `log.Fatal` or `os.Exit`,
-even during startup. Instead, return detailed errors to be handled appropriately 
+even during startup. Instead, return detailed errors to be handled appropriately
 by the caller. The code in packages other than `main` may be imported and used by
-third-party applications, and they should have full control over error handling 
+third-party applications, and they should have full control over error handling
 and process termination.
 
 ### Do not Crash after Startup
@@ -247,3 +269,21 @@ tests and try to keep them as short as possible.
 
 If you implement a new component add end-to-end tests for the component using
 the automated [Testbed](testbed/README.md).
+
+## Release
+
+See [release](docs/release.md) for details.
+
+## Common Issues
+
+Build fails due to depenedency issues, e.g.
+
+```sh
+go: github.com/golangci/golangci-lint@v1.31.0 requires
+	github.com/tommy-muehle/go-mnd@v1.3.1-0.20200224220436-e6f9a994e8fa: invalid pseudo-version: git fetch --unshallow -f origin in /root/go/pkg/mod/cache/vcs/053b1e985f53e43f78db2b3feaeb7e40a2ae482c92734ba3982ca463d5bf19ce: exit status 128:
+	fatal: git fetch-pack: expected shallow list
+ ```
+
+`go env GOPROXY` should return `https://proxy.golang.org,direct`. If it does not, set it as an environment variable:
+
+`export GOPROXY=https://proxy.golang.org,direct`

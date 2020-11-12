@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,41 +21,39 @@ import (
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	ocmetrics "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
-	"github.com/golang/protobuf/ptypes"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data/testdata"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
+	"go.opentelemetry.io/collector/consumer/consumerdata"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/internal/data/testdata"
+	"go.opentelemetry.io/collector/translator/conventions"
 )
 
-func TestMetricsDataToOC(t *testing.T) {
-
-	sampleMetricData := testdata.GenerateMetricDataWithCountersHistogramAndSummary()
+func TestMetricsToOC(t *testing.T) {
+	sampleMetricData := testdata.GeneratMetricsAllTypesWithSampleDatapoints()
 	attrs := sampleMetricData.ResourceMetrics().At(0).Resource().Attributes()
 	attrs.Upsert(conventions.AttributeHostHostname, pdata.NewAttributeValueString("host1"))
 	attrs.Upsert(conventions.OCAttributeProcessID, pdata.NewAttributeValueInt(123))
 	attrs.Upsert(conventions.OCAttributeProcessStartTime, pdata.NewAttributeValueString("2020-02-11T20:26:00Z"))
-	attrs.Upsert(conventions.AttributeLibraryLanguage, pdata.NewAttributeValueString("CPP"))
-	attrs.Upsert(conventions.AttributeLibraryVersion, pdata.NewAttributeValueString("v2.0.1"))
+	attrs.Upsert(conventions.AttributeTelemetrySDKLanguage, pdata.NewAttributeValueString("cpp"))
+	attrs.Upsert(conventions.AttributeTelemetrySDKVersion, pdata.NewAttributeValueString("v2.0.1"))
 	attrs.Upsert(conventions.OCAttributeExporterVersion, pdata.NewAttributeValueString("v1.2.0"))
 
 	tests := []struct {
 		name     string
-		internal data.MetricData
+		internal pdata.Metrics
 		oc       []consumerdata.MetricsData
 	}{
 		{
 			name:     "empty",
-			internal: testdata.GenerateMetricDataEmpty(),
+			internal: testdata.GenerateMetricsEmpty(),
 			oc:       []consumerdata.MetricsData(nil),
 		},
 
 		{
 			name:     "one-empty-resource-metrics",
-			internal: testdata.GenerateMetricDataOneEmptyResourceMetrics(),
+			internal: testdata.GenerateMetricsOneEmptyResourceMetrics(),
 			oc: []consumerdata.MetricsData{
 				{},
 			},
@@ -63,7 +61,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-empty-one-nil-resource-metrics",
-			internal: testdata.GenerateMetricDataOneEmptyOneNilResourceMetrics(),
+			internal: testdata.GenerateMetricsOneEmptyOneNilResourceMetrics(),
 			oc: []consumerdata.MetricsData{
 				{},
 			},
@@ -71,7 +69,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "no-libraries",
-			internal: testdata.GenerateMetricDataNoLibraries(),
+			internal: testdata.GenerateMetricsNoLibraries(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataNoMetrics(),
 			},
@@ -79,7 +77,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-empty-instrumentation-library",
-			internal: testdata.GenerateMetricDataOneEmptyInstrumentationLibrary(),
+			internal: testdata.GenerateMetricsOneEmptyInstrumentationLibrary(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataNoMetrics(),
 			},
@@ -87,7 +85,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-empty-one-nil-instrumentation-library",
-			internal: testdata.GenerateMetricDataOneEmptyOneNilInstrumentationLibrary(),
+			internal: testdata.GenerateMetricsOneEmptyOneNilInstrumentationLibrary(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataNoMetrics(),
 			},
@@ -95,7 +93,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-metric-no-resource",
-			internal: testdata.GenerateMetricDataOneMetricNoResource(),
+			internal: testdata.GenerateMetricsOneMetricNoResource(),
 			oc: []consumerdata.MetricsData{
 				{
 					Metrics: []*ocmetrics.Metric{
@@ -107,7 +105,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-metric",
-			internal: testdata.GenerateMetricDataOneMetric(),
+			internal: testdata.GenerateMetricsOneMetric(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataMetricsOneMetric(),
 			},
@@ -115,7 +113,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-metric-one-nil",
-			internal: testdata.GenerateMetricDataOneMetricOneNil(),
+			internal: testdata.GenerateMetricsOneMetricOneNil(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataMetricsOneMetric(),
 			},
@@ -123,7 +121,7 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-metric-one-nil-point",
-			internal: testdata.GenerateMetricDataOneMetricOneNilPoint(),
+			internal: testdata.GenerateMetricsOneMetricOneNilPoint(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataMetricsOneMetric(),
 			},
@@ -131,23 +129,15 @@ func TestMetricsDataToOC(t *testing.T) {
 
 		{
 			name:     "one-metric-no-labels",
-			internal: testdata.GenerateMetricDataOneMetricNoLabels(),
+			internal: testdata.GenerateMetricsOneMetricNoLabels(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataNoLabels(),
 			},
 		},
 
 		{
-			name:     "one-metric-labels-in-descriptor",
-			internal: testdata.GenerateMetricDataOneMetricLabelsInDescriptor(),
-			oc: []consumerdata.MetricsData{
-				generateOCTestDataMetricsInDescriptor(),
-			},
-		},
-
-		{
 			name:     "all-types-no-data-points",
-			internal: testdata.GenerateMetricDataAllTypesNoDataPoints(),
+			internal: testdata.GenerateMetricsAllTypesNoDataPoints(),
 			oc: []consumerdata.MetricsData{
 				generateOCTestDataNoPoints(),
 			},
@@ -157,22 +147,45 @@ func TestMetricsDataToOC(t *testing.T) {
 			name:     "sample-metric",
 			internal: sampleMetricData,
 			oc: []consumerdata.MetricsData{
-				generateOCTestData(t),
+				generateOCTestData(),
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := MetricDataToOC(test.internal)
+			got := MetricsToOC(test.internal)
 			assert.EqualValues(t, test.oc, got)
 		})
 	}
 }
 
-func generateOCTestData(t *testing.T) consumerdata.MetricsData {
-	ts, err := ptypes.TimestampProto(time.Date(2020, 2, 11, 20, 26, 0, 0, time.UTC))
-	assert.NoError(t, err)
+func TestMetricsToOC_InvalidDataType(t *testing.T) {
+	internal := testdata.GenerateMetricsMetricTypeInvalid()
+	want := []consumerdata.MetricsData{
+		{
+			Node: &occommon.Node{},
+			Resource: &ocresource.Resource{
+				Labels: map[string]string{"resource-attr": "resource-attr-val-1"},
+			},
+			Metrics: []*ocmetrics.Metric{
+				{
+					MetricDescriptor: &ocmetrics.MetricDescriptor{
+						Name:      testdata.TestCounterIntMetricName,
+						Unit:      "1",
+						Type:      ocmetrics.MetricDescriptor_UNSPECIFIED,
+						LabelKeys: nil,
+					},
+				},
+			},
+		},
+	}
+	got := MetricsToOC(internal)
+	assert.EqualValues(t, want, got)
+}
+
+func generateOCTestData() consumerdata.MetricsData {
+	ts := timestamppb.New(time.Date(2020, 2, 11, 20, 26, 0, 0, time.UTC))
 
 	return consumerdata.MetricsData{
 		Node: &occommon.Node{
@@ -195,8 +208,9 @@ func generateOCTestData(t *testing.T) consumerdata.MetricsData {
 		Metrics: []*ocmetrics.Metric{
 			generateOCTestMetricInt(),
 			generateOCTestMetricDouble(),
-			generateOCTestMetricHistogram(),
-			generateOCTestMetricSummary(),
+			generateOCTestMetricDoubleHistogram(),
+			generateOCTestMetricIntHistogram(),
+			generateOCTestMetricDoubleSummary(),
 		},
 	}
 }

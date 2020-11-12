@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,9 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/service/defaultcomponents"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/service/defaultcomponents"
 )
 
 func TestValidateConfigFromFactories_Success(t *testing.T) {
@@ -187,7 +187,7 @@ func TestValidateConfig(t *testing.T) {
 // a config not satisfying the validation.
 type badConfigExtensionFactory struct{}
 
-func (b badConfigExtensionFactory) Type() string {
+func (b badConfigExtensionFactory) Type() configmodels.Type {
 	return "bad_config"
 }
 

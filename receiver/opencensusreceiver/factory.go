@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,12 +17,12 @@ package opencensusreceiver
 import (
 	"context"
 
-	"go.uber.org/zap"
-
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/receiver"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/receiver/receiverhelper"
 )
 
 const (
@@ -30,43 +30,38 @@ const (
 	typeStr = "opencensus"
 )
 
-// Factory is the Factory for receiver.
-type Factory struct {
+func NewFactory() component.ReceiverFactory {
+	return receiverhelper.NewFactory(
+		typeStr,
+		createDefaultConfig,
+		receiverhelper.WithTraces(createTraceReceiver),
+		receiverhelper.WithMetrics(createMetricsReceiver))
 }
 
-// Type gets the type of the Receiver config created by this Factory.
-func (f *Factory) Type() string {
-	return typeStr
-}
-
-// CustomUnmarshaler returns nil because we don't need custom unmarshaling for this config.
-func (f *Factory) CustomUnmarshaler() component.CustomUnmarshaler {
-	return nil
-}
-
-// CreateDefaultConfig creates the default configuration for receiver.
-func (f *Factory) CreateDefaultConfig() configmodels.Receiver {
+func createDefaultConfig() configmodels.Receiver {
 	return &Config{
-		SecureReceiverSettings: receiver.SecureReceiverSettings{
-			ReceiverSettings: configmodels.ReceiverSettings{
-				TypeVal:  typeStr,
-				NameVal:  typeStr,
-				Endpoint: "localhost:55678",
-				// Disable: false - This receiver is enabled by default.
-			},
+		ReceiverSettings: configmodels.ReceiverSettings{
+			TypeVal: typeStr,
+			NameVal: typeStr,
 		},
-		Transport: "tcp",
+		GRPCServerSettings: configgrpc.GRPCServerSettings{
+			NetAddr: confignet.NetAddr{
+				Endpoint:  "0.0.0.0:55678",
+				Transport: "tcp",
+			},
+			// We almost write 0 bytes, so no need to tune WriteBufferSize.
+			ReadBufferSize: 512 * 1024,
+		},
 	}
 }
 
-// CreateTraceReceiver creates a  trace receiver based on provided config.
-func (f *Factory) CreateTraceReceiver(
-	ctx context.Context,
-	logger *zap.Logger,
+func createTraceReceiver(
+	_ context.Context,
+	_ component.ReceiverCreateParams,
 	cfg configmodels.Receiver,
-	nextConsumer consumer.TraceConsumerOld,
-) (component.TraceReceiver, error) {
-	r, err := f.createReceiver(cfg)
+	nextConsumer consumer.TracesConsumer,
+) (component.TracesReceiver, error) {
+	r, err := createReceiver(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -76,24 +71,23 @@ func (f *Factory) CreateTraceReceiver(
 	return r, nil
 }
 
-// CreateMetricsReceiver creates a metrics receiver based on provided config.
-func (f *Factory) CreateMetricsReceiver(
-	logger *zap.Logger,
+func createMetricsReceiver(
+	_ context.Context,
+	_ component.ReceiverCreateParams,
 	cfg configmodels.Receiver,
-	consumer consumer.MetricsConsumerOld,
+	nextConsumer consumer.MetricsConsumer,
 ) (component.MetricsReceiver, error) {
-
-	r, err := f.createReceiver(cfg)
+	r, err := createReceiver(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	r.metricsConsumer = consumer
+	r.metricsConsumer = nextConsumer
 
 	return r, nil
 }
 
-func (f *Factory) createReceiver(cfg configmodels.Receiver) (*Receiver, error) {
+func createReceiver(cfg configmodels.Receiver) (*ocReceiver, error) {
 	rCfg := cfg.(*Config)
 
 	// There must be one receiver for both metrics and traces. We maintain a map of
@@ -109,8 +103,8 @@ func (f *Factory) createReceiver(cfg configmodels.Receiver) (*Receiver, error) {
 		}
 
 		// We don't have a receiver, so create one.
-		receiver, err = New(
-			rCfg.Name(), rCfg.Transport, rCfg.Endpoint, nil, nil, opts...)
+		receiver, err = newOpenCensusReceiver(
+			rCfg.Name(), rCfg.NetAddr.Transport, rCfg.NetAddr.Endpoint, nil, nil, opts...)
 		if err != nil {
 			return nil, err
 		}
@@ -122,6 +116,6 @@ func (f *Factory) createReceiver(cfg configmodels.Receiver) (*Receiver, error) {
 
 // This is the map of already created OpenCensus receivers for particular configurations.
 // We maintain this map because the Factory is asked trace and metric receivers separately
-// when it gets CreateTraceReceiver() and CreateMetricsReceiver() but they must not
-// create separate objects, they must use one Receiver object per configuration.
-var receivers = map[*Config]*Receiver{}
+// when it gets CreateTracesReceiver() and CreateMetricsReceiver() but they must not
+// create separate objects, they must use one ocReceiver object per configuration.
+var receivers = map[*Config]*ocReceiver{}

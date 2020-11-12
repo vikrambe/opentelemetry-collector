@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,24 +20,26 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/open-telemetry/opentelemetry-collector/config"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/internal/processor/filterspan"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/configtest"
+	"go.opentelemetry.io/collector/internal/processor/filterconfig"
+	"go.opentelemetry.io/collector/internal/processor/filterset"
 )
 
 func TestLoadConfig(t *testing.T) {
-	factories, err := config.ExampleComponents()
+	factories, err := componenttest.ExampleComponents()
 	assert.NoError(t, err)
 
-	factory := &Factory{}
+	factory := NewFactory()
 	factories.Processors[typeStr] = factory
 
-	config, err := config.LoadConfigFile(t, path.Join(".", "testdata", "config.yaml"), factories)
+	cfg, err := configtest.LoadConfigFile(t, path.Join(".", "testdata", "config.yaml"), factories)
 
-	assert.Nil(t, err)
-	assert.NotNil(t, config)
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
 
-	p0 := config.Processors["span/custom"]
+	p0 := cfg.Processors["span/custom"]
 	assert.Equal(t, p0, &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
@@ -49,7 +51,7 @@ func TestLoadConfig(t *testing.T) {
 		},
 	})
 
-	p1 := config.Processors["span/no-separator"]
+	p1 := cfg.Processors["span/no-separator"]
 	assert.Equal(t, p1, &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
@@ -61,7 +63,7 @@ func TestLoadConfig(t *testing.T) {
 		},
 	})
 
-	p2 := config.Processors["span/to_attributes"]
+	p2 := cfg.Processors["span/to_attributes"]
 	assert.Equal(t, p2, &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
@@ -74,20 +76,20 @@ func TestLoadConfig(t *testing.T) {
 		},
 	})
 
-	p3 := config.Processors["span/includeexclude"]
+	p3 := cfg.Processors["span/includeexclude"]
 	assert.Equal(t, p3, &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
 			NameVal: "span/includeexclude",
 		},
-		MatchConfig: filterspan.MatchConfig{
-			Include: &filterspan.MatchProperties{
-				MatchType: filterspan.MatchTypeRegexp,
+		MatchConfig: filterconfig.MatchConfig{
+			Include: &filterconfig.MatchProperties{
+				Config:    *createMatchConfig(filterset.Regexp),
 				Services:  []string{`banks`},
 				SpanNames: []string{"^(.*?)/(.*?)$"},
 			},
-			Exclude: &filterspan.MatchProperties{
-				MatchType: filterspan.MatchTypeStrict,
+			Exclude: &filterconfig.MatchProperties{
+				Config:    *createMatchConfig(filterset.Strict),
 				SpanNames: []string{`donot/change`},
 			},
 		},
@@ -97,4 +99,10 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 	})
+}
+
+func createMatchConfig(matchType filterset.MatchType) *filterset.Config {
+	return &filterset.Config{
+		MatchType: matchType,
+	}
 }

@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,8 +28,8 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 // These are errors that can be returned by Load(). Note that error codes are not part
@@ -38,17 +38,10 @@ type configErrorCode int
 
 const (
 	_ configErrorCode = iota // skip 0, start errors codes from 1.
+	errInvalidSubConfig
 	errInvalidTypeAndNameKey
-	errUnknownExtensionType
-	errUnknownReceiverType
-	errUnknownExporterType
-	errUnknownProcessorType
-	errInvalidPipelineType
-	errDuplicateExtensionName
-	errDuplicateReceiverName
-	errDuplicateExporterName
-	errDuplicateProcessorName
-	errDuplicatePipelineName
+	errUnknownType
+	errDuplicateName
 	errMissingPipelines
 	errPipelineMustHaveReceiver
 	errPipelineMustHaveExporter
@@ -58,13 +51,7 @@ const (
 	errPipelineExporterNotExists
 	errMissingReceivers
 	errMissingExporters
-	errUnmarshalErrorOnTopLevelSection
-	errUnmarshalErrorOnExtension
-	errUnmarshalErrorOnService
-	errUnmarshalErrorOnReceiver
-	errUnmarshalErrorOnProcessor
-	errUnmarshalErrorOnExporter
-	errUnmarshalErrorOnPipeline
+	errUnmarshalTopLevelStructureError
 )
 
 type configError struct {
@@ -81,9 +68,6 @@ const (
 	// extensionsKeyName is the configuration key name for extensions section.
 	extensionsKeyName = "extensions"
 
-	// serviceKeyName is the configuration key name for service section.
-	serviceKeyName = "service"
-
 	// receiversKeyName is the configuration key name for receivers section.
 	receiversKeyName = "receivers"
 
@@ -97,24 +81,35 @@ const (
 	pipelinesKeyName = "pipelines"
 )
 
+type configSettings struct {
+	Receivers  map[string]map[string]interface{} `mapstructure:"receivers"`
+	Processors map[string]map[string]interface{} `mapstructure:"processors"`
+	Exporters  map[string]map[string]interface{} `mapstructure:"exporters"`
+	Extensions map[string]map[string]interface{} `mapstructure:"extensions"`
+	Service    serviceSettings                   `mapstructure:"service"`
+}
+
+type serviceSettings struct {
+	Extensions []string                    `mapstructure:"extensions"`
+	Pipelines  map[string]pipelineSettings `mapstructure:"pipelines"`
+}
+
+type pipelineSettings struct {
+	Receivers  []string `mapstructure:"receivers"`
+	Processors []string `mapstructure:"processors"`
+	Exporters  []string `mapstructure:"exporters"`
+}
+
+// deprecatedUnmarshaler is the old/deprecated way to provide custom unmarshaler.
+type deprecatedUnmarshaler interface {
+	// CustomUnmarshaler returns a custom unmarshaler for the configuration or nil if
+	// there is no need for custom unmarshaling. This is typically used if viper.UnmarshalExact()
+	// is not sufficient to unmarshal correctly.
+	CustomUnmarshaler() component.CustomUnmarshaler
+}
+
 // typeAndNameSeparator is the separator that is used between type and name in type/name composite keys.
 const typeAndNameSeparator = "/"
-
-// Factories struct holds in a single type all component factories that
-// can be handled by the Config.
-type Factories struct {
-	// Receivers maps receiver type names in the config to the respective factory.
-	Receivers map[string]component.ReceiverFactoryBase
-
-	// Processors maps processor type names in the config to the respective factory.
-	Processors map[string]component.ProcessorFactoryBase
-
-	// Exporters maps exporter type names in the config to the respective factory.
-	Exporters map[string]component.ExporterFactoryBase
-
-	// Extensions maps extension type names in the config to the respective factory.
-	Extensions map[string]component.ExtensionFactory
-}
 
 // Creates a new Viper instance with a different key-delimitor "::" instead of the
 // default ".". This way configs can have keys that contain ".".
@@ -123,9 +118,10 @@ func NewViper() *viper.Viper {
 }
 
 // Load loads a Config from Viper.
+// After loading the config, need to check if it is valid by calling `ValidateConfig`.
 func Load(
 	v *viper.Viper,
-	factories Factories,
+	factories component.Factories,
 ) (*configmodels.Config, error) {
 
 	var config configmodels.Config
@@ -133,24 +129,21 @@ func Load(
 	// Load the config.
 
 	// Struct to validate top level sections.
-	var topLevelSections struct {
-		Extensions map[string]interface{} `mapstructure:"extensions"`
-		Service    map[string]interface{} `mapstructure:"service"`
-		Receivers  map[string]interface{} `mapstructure:"receivers"`
-		Processors map[string]interface{} `mapstructure:"processors"`
-		Exporters  map[string]interface{} `mapstructure:"exporters"`
-	}
-
-	if err := v.UnmarshalExact(&topLevelSections); err != nil {
+	var rawCfg configSettings
+	if err := v.UnmarshalExact(&rawCfg); err != nil {
 		return nil, &configError{
-			code: errUnmarshalErrorOnTopLevelSection,
-			msg:  fmt.Sprintf("error reading top level sections: %s", err.Error()),
+			code: errUnmarshalTopLevelStructureError,
+			msg:  fmt.Sprintf("error reading top level configuration sections: %s", err.Error()),
 		}
 	}
 
+	// In the following section use v.GetStringMap(xyzKeyName) instead of rawCfg.Xyz, because
+	// UnmarshalExact will not unmarshal entries in the map[string]interface{} with nil values.
+	// GetStringMap does the correct thing.
+
 	// Start with the service extensions.
 
-	extensions, err := loadExtensions(v, factories.Extensions)
+	extensions, err := loadExtensions(v.GetStringMap(extensionsKeyName), factories.Extensions)
 	if err != nil {
 		return nil, err
 	}
@@ -158,26 +151,26 @@ func Load(
 
 	// Load data components (receivers, exporters, and processors).
 
-	receivers, err := loadReceivers(v, factories.Receivers)
+	receivers, err := loadReceivers(v.GetStringMap(receiversKeyName), factories.Receivers)
 	if err != nil {
 		return nil, err
 	}
 	config.Receivers = receivers
 
-	exporters, err := loadExporters(v, factories.Exporters)
+	exporters, err := loadExporters(v.GetStringMap(exportersKeyName), factories.Exporters)
 	if err != nil {
 		return nil, err
 	}
 	config.Exporters = exporters
 
-	processors, err := loadProcessors(v, factories.Processors)
+	processors, err := loadProcessors(v.GetStringMap(processorsKeyName), factories.Processors)
 	if err != nil {
 		return nil, err
 	}
 	config.Processors = processors
 
 	// Load the service and its data pipelines.
-	service, err := loadService(v)
+	service, err := loadService(rawCfg.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -190,14 +183,14 @@ func Load(
 // fullName is the key normalized such that type and name components have spaces trimmed.
 // The "type" part must be present, the forward slash and "name" are optional. typeStr
 // will be non-empty if err is nil.
-func DecodeTypeAndName(key string) (typeStr, fullName string, err error) {
+func DecodeTypeAndName(key string) (typeStr configmodels.Type, fullName string, err error) {
 	items := strings.SplitN(key, typeAndNameSeparator, 2)
 
 	if len(items) >= 1 {
-		typeStr = strings.TrimSpace(items[0])
+		typeStr = configmodels.Type(strings.TrimSpace(items[0]))
 	}
 
-	if len(items) < 1 || typeStr == "" {
+	if len(items) == 0 || typeStr == "" {
 		err = errors.New("type/name key must have the type part")
 		return
 	}
@@ -216,68 +209,77 @@ func DecodeTypeAndName(key string) (typeStr, fullName string, err error) {
 
 	// Create normalized fullName.
 	if nameSuffix == "" {
-		fullName = typeStr
+		fullName = string(typeStr)
 	} else {
-		fullName = typeStr + typeAndNameSeparator + nameSuffix
+		fullName = string(typeStr) + typeAndNameSeparator + nameSuffix
 	}
 
 	err = nil
 	return
 }
 
-func loadExtensions(v *viper.Viper, factories map[string]component.ExtensionFactory) (configmodels.Extensions, error) {
-	// Get the list of all "extensions" sub vipers from config source.
-	extensionsConfig := viperSub(v, extensionsKeyName)
-	expandEnvConfig(extensionsConfig)
+func errorInvalidTypeAndNameKey(component, key string, err error) error {
+	return &configError{
+		code: errInvalidTypeAndNameKey,
+		msg:  fmt.Sprintf("invalid %s type and name key %q: %v", component, key, err),
+	}
+}
 
-	// Get the map of "extensions" sub-keys.
-	keyMap := v.GetStringMap(extensionsKeyName)
+func errorUnknownType(component string, typeStr configmodels.Type, fullName string) error {
+	return &configError{
+		code: errUnknownType,
+		msg:  fmt.Sprintf("unknown %s type %q for %s", component, typeStr, fullName),
+	}
+}
 
+func errorUnmarshalError(component string, fullName string, err error) error {
+	return &configError{
+		code: errUnmarshalTopLevelStructureError,
+		msg:  fmt.Sprintf("error reading %s configuration for %s: %v", component, fullName, err),
+	}
+}
+
+func errorDuplicateName(component string, fullName string) error {
+	return &configError{
+		code: errDuplicateName,
+		msg:  fmt.Sprintf("duplicate %s name %s", component, fullName),
+	}
+}
+
+func loadExtensions(exts map[string]interface{}, factories map[configmodels.Type]component.ExtensionFactory) (configmodels.Extensions, error) {
 	// Prepare resulting map.
 	extensions := make(configmodels.Extensions)
 
 	// Iterate over extensions and create a config for each.
-	for key := range keyMap {
+	for key, value := range exts {
+		componentConfig := viperFromStringMap(cast.ToStringMap(value))
+		expandEnvConfig(componentConfig)
+
 		// Decode the key into type and fullName components.
 		typeStr, fullName, err := DecodeTypeAndName(key)
 		if err != nil {
-			return nil, &configError{
-				code: errInvalidTypeAndNameKey,
-				msg:  fmt.Sprintf("invalid key %q: %s", key, err.Error()),
-			}
+			return nil, errorInvalidTypeAndNameKey(extensionsKeyName, key, err)
 		}
 
 		// Find extension factory based on "type" that we read from config source.
 		factory := factories[typeStr]
 		if factory == nil {
-			return nil, &configError{
-				code: errUnknownExtensionType,
-				msg:  fmt.Sprintf("unknown extension type %q", typeStr),
-			}
+			return nil, errorUnknownType(extensionsKeyName, typeStr, fullName)
 		}
 
 		// Create the default config for this extension
 		extensionCfg := factory.CreateDefaultConfig()
-		extensionCfg.SetType(typeStr)
 		extensionCfg.SetName(fullName)
-
-		// Unmarshal only the subconfig for this exporter.
-		componentConfig := viperSub(extensionsConfig, key)
 
 		// Now that the default config struct is created we can Unmarshal into it
 		// and it will apply user-defined config on top of the default.
-		if err := componentConfig.UnmarshalExact(extensionCfg); err != nil {
-			return nil, &configError{
-				code: errUnmarshalErrorOnExtension,
-				msg:  fmt.Sprintf("error reading settings for extension type %q: %v", typeStr, err),
-			}
+		unm := unmarshaler(factory)
+		if err := unm(componentConfig, extensionCfg); err != nil {
+			return nil, errorUnmarshalError(extensionsKeyName, fullName, err)
 		}
 
 		if extensions[fullName] != nil {
-			return nil, &configError{
-				code: errDuplicateExtensionName,
-				msg:  fmt.Sprintf("duplicate extension name %q", fullName),
-			}
+			return nil, errorDuplicateName(extensionsKeyName, fullName)
 		}
 
 		extensions[fullName] = extensionCfg
@@ -286,102 +288,56 @@ func loadExtensions(v *viper.Viper, factories map[string]component.ExtensionFact
 	return extensions, nil
 }
 
-func loadService(v *viper.Viper) (configmodels.Service, error) {
-	var service configmodels.Service
-	serviceSub := viperSub(v, serviceKeyName)
-	expandEnvConfig(serviceSub)
+func loadService(rawService serviceSettings) (configmodels.Service, error) {
+	var ret configmodels.Service
+	ret.Extensions = rawService.Extensions
 
 	// Process the pipelines first so in case of error on them it can be properly
 	// reported.
-	pipelines, err := loadPipelines(serviceSub)
-	if err != nil {
-		return service, err
-	}
+	pipelines, err := loadPipelines(rawService.Pipelines)
+	ret.Pipelines = pipelines
 
-	// Do an exact match to find any unused section on config.
-	if err := serviceSub.UnmarshalExact(&service); err != nil {
-		return service, &configError{
-			code: errUnmarshalErrorOnService,
-			msg:  fmt.Sprintf("error reading settings for %q: %v", serviceKeyName, err),
-		}
-	}
-
-	// Unmarshal cannot properly build Pipelines field, set it to the value
-	// previously loaded.
-	service.Pipelines = pipelines
-
-	return service, nil
+	return ret, err
 }
 
 // LoadReceiver loads a receiver config from componentConfig using the provided factories.
-func LoadReceiver(componentConfig *viper.Viper, typeStr string, fullName string, factory component.ReceiverFactoryBase) (configmodels.Receiver, error) {
+func LoadReceiver(componentConfig *viper.Viper, typeStr configmodels.Type, fullName string, factory component.ReceiverFactory) (configmodels.Receiver, error) {
 	// Create the default config for this receiver.
 	receiverCfg := factory.CreateDefaultConfig()
-	receiverCfg.SetType(typeStr)
 	receiverCfg.SetName(fullName)
 
 	// Now that the default config struct is created we can Unmarshal into it
 	// and it will apply user-defined config on top of the default.
-	customUnmarshaler := factory.CustomUnmarshaler()
-	var err error
-	if customUnmarshaler != nil {
-		// This configuration requires a custom unmarshaler, use it.
-		err = customUnmarshaler(componentConfig, receiverCfg)
-	} else {
-		err = componentConfig.UnmarshalExact(receiverCfg)
-	}
-
-	if err != nil {
-		return nil, &configError{
-			code: errUnmarshalErrorOnReceiver,
-			msg:  fmt.Sprintf("error reading settings for receiver type %q: %v", typeStr, err),
-		}
+	unm := unmarshaler(factory)
+	if err := unm(componentConfig, receiverCfg); err != nil {
+		return nil, errorUnmarshalError(receiversKeyName, fullName, err)
 	}
 
 	return receiverCfg, nil
 }
 
-func loadReceivers(v *viper.Viper, factories map[string]component.ReceiverFactoryBase) (configmodels.Receivers, error) {
-	// Get the list of all "receivers" sub vipers from config source.
-	receiversConfig := viperSub(v, receiversKeyName)
-	expandEnvConfig(receiversConfig)
-
-	// Get the map of "receivers" sub-keys.
-	keyMap := v.GetStringMap(receiversKeyName)
-
-	// Currently there is no default receiver enabled. The configuration must specify at least one receiver to enable
-	// functionality.
-	if len(keyMap) == 0 {
-		return nil, &configError{
-			code: errMissingReceivers,
-			msg:  "no receivers specified in config",
-		}
-	}
-
+func loadReceivers(recvs map[string]interface{}, factories map[configmodels.Type]component.ReceiverFactory) (configmodels.Receivers, error) {
 	// Prepare resulting map
 	receivers := make(configmodels.Receivers)
 
 	// Iterate over input map and create a config for each.
-	for key := range keyMap {
+	for key, value := range recvs {
+		componentConfig := viperFromStringMap(cast.ToStringMap(value))
+		expandEnvConfig(componentConfig)
+
 		// Decode the key into type and fullName components.
 		typeStr, fullName, err := DecodeTypeAndName(key)
 		if err != nil {
-			return nil, &configError{
-				code: errInvalidTypeAndNameKey,
-				msg:  fmt.Sprintf("invalid key %q: %s", key, err.Error()),
-			}
+			return nil, errorInvalidTypeAndNameKey(receiversKeyName, key, err)
 		}
 
 		// Find receiver factory based on "type" that we read from config source
 		factory := factories[typeStr]
 		if factory == nil {
-			return nil, &configError{
-				code: errUnknownReceiverType,
-				msg:  fmt.Sprintf("unknown receiver type %q", typeStr),
-			}
+			return nil, errorUnknownType(receiversKeyName, typeStr, fullName)
 		}
 
-		receiverCfg, err := LoadReceiver(viperSub(receiversConfig, key), typeStr, fullName, factory)
+		receiverCfg, err := LoadReceiver(componentConfig, typeStr, fullName, factory)
 
 		if err != nil {
 			// LoadReceiver already wraps the error.
@@ -389,10 +345,7 @@ func loadReceivers(v *viper.Viper, factories map[string]component.ReceiverFactor
 		}
 
 		if receivers[receiverCfg.Name()] != nil {
-			return nil, &configError{
-				code: errDuplicateReceiverName,
-				msg:  fmt.Sprintf("duplicate receiver name %q", receiverCfg.Name()),
-			}
+			return nil, errorDuplicateName(receiversKeyName, fullName)
 		}
 		receivers[receiverCfg.Name()] = receiverCfg
 	}
@@ -400,67 +353,40 @@ func loadReceivers(v *viper.Viper, factories map[string]component.ReceiverFactor
 	return receivers, nil
 }
 
-func loadExporters(v *viper.Viper, factories map[string]component.ExporterFactoryBase) (configmodels.Exporters, error) {
-	// Get the list of all "exporters" sub vipers from config source.
-	exportersConfig := viperSub(v, exportersKeyName)
-	expandEnvConfig(exportersConfig)
-
-	// Get the map of "exporters" sub-keys.
-	keyMap := v.GetStringMap(exportersKeyName)
-
-	// There is no default exporter. The configuration must specify at least one exporter to enable functionality.
-	if len(keyMap) == 0 {
-		return nil, &configError{
-			code: errMissingExporters,
-			msg:  "no exporters specified in config",
-		}
-	}
-
+func loadExporters(exps map[string]interface{}, factories map[configmodels.Type]component.ExporterFactory) (configmodels.Exporters, error) {
 	// Prepare resulting map
 	exporters := make(configmodels.Exporters)
 
-	// Iterate over exporters and create a config for each.
-	for key := range keyMap {
+	// Iterate over Exporters and create a config for each.
+	for key, value := range exps {
+		componentConfig := viperFromStringMap(cast.ToStringMap(value))
+		expandEnvConfig(componentConfig)
+
 		// Decode the key into type and fullName components.
 		typeStr, fullName, err := DecodeTypeAndName(key)
 		if err != nil {
-			return nil, &configError{
-				code: errInvalidTypeAndNameKey,
-				msg:  fmt.Sprintf("invalid key %q: %s", key, err.Error()),
-			}
+			return nil, errorInvalidTypeAndNameKey(exportersKeyName, key, err)
 		}
 
 		// Find exporter factory based on "type" that we read from config source
 		factory := factories[typeStr]
 		if factory == nil {
-			return nil, &configError{
-				code: errUnknownExporterType,
-				msg:  fmt.Sprintf("unknown exporter type %q", typeStr),
-			}
+			return nil, errorUnknownType(exportersKeyName, typeStr, fullName)
 		}
 
 		// Create the default config for this exporter
 		exporterCfg := factory.CreateDefaultConfig()
-		exporterCfg.SetType(typeStr)
 		exporterCfg.SetName(fullName)
-
-		// Unmarshal only the subconfig for this exporter.
-		componentConfig := viperSub(exportersConfig, key)
 
 		// Now that the default config struct is created we can Unmarshal into it
 		// and it will apply user-defined config on top of the default.
-		if err := componentConfig.UnmarshalExact(exporterCfg); err != nil {
-			return nil, &configError{
-				code: errUnmarshalErrorOnExporter,
-				msg:  fmt.Sprintf("error reading settings for exporter type %q: %v", typeStr, err),
-			}
+		unm := unmarshaler(factory)
+		if err := unm(componentConfig, exporterCfg); err != nil {
+			return nil, errorUnmarshalError(exportersKeyName, fullName, err)
 		}
 
 		if exporters[fullName] != nil {
-			return nil, &configError{
-				code: errDuplicateExporterName,
-				msg:  fmt.Sprintf("duplicate exporter name %q", fullName),
-			}
+			return nil, errorDuplicateName(exportersKeyName, fullName)
 		}
 
 		exporters[fullName] = exporterCfg
@@ -469,59 +395,40 @@ func loadExporters(v *viper.Viper, factories map[string]component.ExporterFactor
 	return exporters, nil
 }
 
-func loadProcessors(v *viper.Viper, factories map[string]component.ProcessorFactoryBase) (configmodels.Processors, error) {
-	// Get the list of all "processors" sub vipers from config source.
-	processorsConfig := viperSub(v, processorsKeyName)
-	expandEnvConfig(processorsConfig)
-
-	// Get the map of "processors" sub-keys.
-	keyMap := v.GetStringMap(processorsKeyName)
-
+func loadProcessors(procs map[string]interface{}, factories map[configmodels.Type]component.ProcessorFactory) (configmodels.Processors, error) {
 	// Prepare resulting map.
 	processors := make(configmodels.Processors)
 
 	// Iterate over processors and create a config for each.
-	for key := range keyMap {
+	for key, value := range procs {
+		componentConfig := viperFromStringMap(cast.ToStringMap(value))
+		expandEnvConfig(componentConfig)
+
 		// Decode the key into type and fullName components.
 		typeStr, fullName, err := DecodeTypeAndName(key)
 		if err != nil {
-			return nil, &configError{
-				code: errInvalidTypeAndNameKey,
-				msg:  fmt.Sprintf("invalid key %q: %s", key, err.Error()),
-			}
+			return nil, errorInvalidTypeAndNameKey(processorsKeyName, key, err)
 		}
 
 		// Find processor factory based on "type" that we read from config source.
 		factory := factories[typeStr]
 		if factory == nil {
-			return nil, &configError{
-				code: errUnknownProcessorType,
-				msg:  fmt.Sprintf("unknown processor type %q", typeStr),
-			}
+			return nil, errorUnknownType(processorsKeyName, typeStr, fullName)
 		}
 
-		// Create the default config for this processors
+		// Create the default config for this processor.
 		processorCfg := factory.CreateDefaultConfig()
-		processorCfg.SetType(typeStr)
 		processorCfg.SetName(fullName)
-
-		// Unmarshal only the subconfig for this processor.
-		componentConfig := viperSub(processorsConfig, key)
 
 		// Now that the default config struct is created we can Unmarshal into it
 		// and it will apply user-defined config on top of the default.
-		if err := componentConfig.UnmarshalExact(processorCfg); err != nil {
-			return nil, &configError{
-				code: errUnmarshalErrorOnProcessor,
-				msg:  fmt.Sprintf("error reading settings for processor type %q: %v", typeStr, err),
-			}
+		unm := unmarshaler(factory)
+		if err := unm(componentConfig, processorCfg); err != nil {
+			return nil, errorUnmarshalError(processorsKeyName, fullName, err)
 		}
 
 		if processors[fullName] != nil {
-			return nil, &configError{
-				code: errDuplicateProcessorName,
-				msg:  fmt.Sprintf("duplicate processor name %q", fullName),
-			}
+			return nil, errorDuplicateName(processorsKeyName, fullName)
 		}
 
 		processors[fullName] = processorCfg
@@ -530,177 +437,126 @@ func loadProcessors(v *viper.Viper, factories map[string]component.ProcessorFact
 	return processors, nil
 }
 
-func loadPipelines(v *viper.Viper) (configmodels.Pipelines, error) {
-	// Get the list of all "pipelines" sub vipers from config source.
-	pipelinesConfig := viperSub(v, pipelinesKeyName)
-
-	// Get the map of "pipelines" sub-keys.
-	keyMap := v.GetStringMap(pipelinesKeyName)
-
+func loadPipelines(pipelinesConfig map[string]pipelineSettings) (configmodels.Pipelines, error) {
 	// Prepare resulting map.
 	pipelines := make(configmodels.Pipelines)
 
 	// Iterate over input map and create a config for each.
-	for key := range keyMap {
+	for key, rawPipeline := range pipelinesConfig {
 		// Decode the key into type and name components.
-		typeStr, name, err := DecodeTypeAndName(key)
+		typeStr, fullName, err := DecodeTypeAndName(key)
 		if err != nil {
-			return nil, &configError{
-				code: errInvalidTypeAndNameKey,
-				msg:  fmt.Sprintf("invalid key %q: %s", key, err.Error()),
-			}
+			return nil, errorInvalidTypeAndNameKey(pipelinesKeyName, key, err)
 		}
 
 		// Create the config for this pipeline.
 		var pipelineCfg configmodels.Pipeline
 
 		// Set the type.
-		switch typeStr {
-		case configmodels.TracesDataTypeStr:
-			pipelineCfg.InputType = configmodels.TracesDataType
-		case configmodels.MetricsDataTypeStr:
-			pipelineCfg.InputType = configmodels.MetricsDataType
+		pipelineCfg.InputType = configmodels.DataType(typeStr)
+		switch pipelineCfg.InputType {
+		case configmodels.TracesDataType:
+		case configmodels.MetricsDataType:
+		case configmodels.LogsDataType:
 		default:
-			return nil, &configError{
-				code: errInvalidPipelineType,
-				msg:  fmt.Sprintf("invalid pipeline type %q (must be metrics or traces)", typeStr),
-			}
+			return nil, errorUnknownType(pipelinesKeyName, typeStr, fullName)
 		}
 
-		pipelineConfig := viperSub(pipelinesConfig, key)
+		pipelineCfg.Name = fullName
+		pipelineCfg.Receivers = rawPipeline.Receivers
+		pipelineCfg.Processors = rawPipeline.Processors
+		pipelineCfg.Exporters = rawPipeline.Exporters
 
-		// Now that the default config struct is created we can Unmarshal into it
-		// and it will apply user-defined config on top of the default.
-		if err := pipelineConfig.UnmarshalExact(&pipelineCfg); err != nil {
-			return nil, &configError{
-				code: errUnmarshalErrorOnPipeline,
-				msg:  fmt.Sprintf("error reading settings for pipeline type %q: %v", typeStr, err),
-			}
+		if pipelines[fullName] != nil {
+			return nil, errorDuplicateName(pipelinesKeyName, fullName)
 		}
 
-		pipelineCfg.Name = name
-
-		if pipelines[name] != nil {
-			return nil, &configError{
-				code: errDuplicatePipelineName,
-				msg:  fmt.Sprintf("duplicate pipeline name %q", name),
-			}
-		}
-
-		pipelines[name] = &pipelineCfg
+		pipelines[fullName] = &pipelineCfg
 	}
 
 	return pipelines, nil
 }
 
 // ValidateConfig validates config.
-func ValidateConfig(cfg *configmodels.Config, logger *zap.Logger) error {
+func ValidateConfig(cfg *configmodels.Config, _ *zap.Logger) error {
 	// This function performs basic validation of configuration. There may be more subtle
 	// invalid cases that we currently don't check for but which we may want to add in
 	// the future (e.g. disallowing receiving and exporting on the same endpoint).
 
-	if err := validateService(cfg, logger); err != nil {
-		return err
-	}
-
-	if err := validatePipelines(cfg, logger); err != nil {
-		return err
-	}
-
 	if err := validateReceivers(cfg); err != nil {
 		return err
 	}
+
 	if err := validateExporters(cfg); err != nil {
 		return err
 	}
-	validateProcessors(cfg)
+
+	if err := validateService(cfg); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func validateService(cfg *configmodels.Config, logger *zap.Logger) error {
-	// Currently only to validate extensions.
-	return validateServiceExtensions(cfg, &cfg.Service, logger)
+func validateService(cfg *configmodels.Config) error {
+	if err := validatePipelines(cfg); err != nil {
+		return err
+	}
+
+	return validateServiceExtensions(cfg)
 }
 
-func validateServiceExtensions(
-	cfg *configmodels.Config,
-	service *configmodels.Service,
-	logger *zap.Logger,
-) error {
-	if len(cfg.Service.Extensions) < 1 {
+func validateServiceExtensions(cfg *configmodels.Config) error {
+	if len(cfg.Service.Extensions) == 0 {
 		return nil
 	}
 
 	// Validate extensions.
-	for _, ref := range service.Extensions {
-		// Check that the name referenced in the service extensions exists in the top-level extensions
+	for _, ref := range cfg.Service.Extensions {
+		// Check that the name referenced in the Service extensions exists in the top-level extensions
 		if cfg.Extensions[ref] == nil {
 			return &configError{
 				code: errExtensionNotExists,
-				msg:  fmt.Sprintf("service references extension %q which does not exists", ref),
+				msg:  fmt.Sprintf("Service references extension %q which does not exist", ref),
 			}
 		}
 	}
 
-	// Remove disabled extensions.
-	extensions := service.Extensions[:0]
-	for _, ref := range service.Extensions {
-		ext := cfg.Extensions[ref]
-		if ext.IsEnabled() {
-			// The extension is enabled. Keep it in the pipeline.
-			extensions = append(extensions, ref)
-		} else {
-			logger.Info("service references a disabled extension. Ignoring the extension.",
-				zap.String("extension", ref))
-		}
-	}
-
-	service.Extensions = extensions
-
 	return nil
 }
 
-func validatePipelines(cfg *configmodels.Config, logger *zap.Logger) error {
+func validatePipelines(cfg *configmodels.Config) error {
 	// Must have at least one pipeline.
-	if len(cfg.Service.Pipelines) < 1 {
+	if len(cfg.Service.Pipelines) == 0 {
 		return &configError{code: errMissingPipelines, msg: "must have at least one pipeline"}
 	}
 
 	// Validate pipelines.
 	for _, pipeline := range cfg.Service.Pipelines {
-		if err := validatePipeline(cfg, pipeline, logger); err != nil {
+		if err := validatePipeline(cfg, pipeline); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validatePipeline(
-	cfg *configmodels.Config,
-	pipeline *configmodels.Pipeline,
-	logger *zap.Logger,
-) error {
-	if err := validatePipelineReceivers(cfg, pipeline, logger); err != nil {
+func validatePipeline(cfg *configmodels.Config, pipeline *configmodels.Pipeline) error {
+	if err := validatePipelineReceivers(cfg, pipeline); err != nil {
 		return err
 	}
 
-	if err := validatePipelineExporters(cfg, pipeline, logger); err != nil {
+	if err := validatePipelineExporters(cfg, pipeline); err != nil {
 		return err
 	}
 
-	if err := validatePipelineProcessors(cfg, pipeline, logger); err != nil {
+	if err := validatePipelineProcessors(cfg, pipeline); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func validatePipelineReceivers(
-	cfg *configmodels.Config,
-	pipeline *configmodels.Pipeline,
-	logger *zap.Logger,
-) error {
+func validatePipelineReceivers(cfg *configmodels.Config, pipeline *configmodels.Pipeline) error {
 	if len(pipeline.Receivers) == 0 {
 		return &configError{
 			code: errPipelineMustHaveReceiver,
@@ -710,39 +566,19 @@ func validatePipelineReceivers(
 
 	// Validate pipeline receiver name references.
 	for _, ref := range pipeline.Receivers {
-		// Check that the name referenced in the pipeline's Receivers exists in the top-level Receivers
+		// Check that the name referenced in the pipeline's receivers exists in the top-level receivers
 		if cfg.Receivers[ref] == nil {
 			return &configError{
 				code: errPipelineReceiverNotExists,
-				msg:  fmt.Sprintf("pipeline %q references receiver %q which does not exists", pipeline.Name, ref),
+				msg:  fmt.Sprintf("pipeline %q references receiver %q which does not exist", pipeline.Name, ref),
 			}
 		}
 	}
 
-	// Remove disabled receivers.
-	rs := pipeline.Receivers[:0]
-	for _, ref := range pipeline.Receivers {
-		rcv := cfg.Receivers[ref]
-		if rcv.IsEnabled() {
-			// The receiver is enabled. Keep it in the pipeline.
-			rs = append(rs, ref)
-		} else {
-			logger.Info("pipeline references a disabled receiver. Ignoring the receiver.",
-				zap.String("pipeline", pipeline.Name),
-				zap.String("receiver", ref))
-		}
-	}
-
-	pipeline.Receivers = rs
-
 	return nil
 }
 
-func validatePipelineExporters(
-	cfg *configmodels.Config,
-	pipeline *configmodels.Pipeline,
-	logger *zap.Logger,
-) error {
+func validatePipelineExporters(cfg *configmodels.Config, pipeline *configmodels.Pipeline) error {
 	if len(pipeline.Exporters) == 0 {
 		return &configError{
 			code: errPipelineMustHaveExporter,
@@ -756,34 +592,15 @@ func validatePipelineExporters(
 		if cfg.Exporters[ref] == nil {
 			return &configError{
 				code: errPipelineExporterNotExists,
-				msg:  fmt.Sprintf("pipeline %q references exporter %q which does not exists", pipeline.Name, ref),
+				msg:  fmt.Sprintf("pipeline %q references exporter %q which does not exist", pipeline.Name, ref),
 			}
 		}
 	}
 
-	// Remove disabled exporters.
-	rs := pipeline.Exporters[:0]
-	for _, ref := range pipeline.Exporters {
-		exp := cfg.Exporters[ref]
-		if exp.IsEnabled() {
-			// The exporter is enabled. Keep it in the pipeline.
-			rs = append(rs, ref)
-		} else {
-			logger.Info("pipeline references a disabled exporter. Ignoring the exporter.",
-				zap.String("pipeline", pipeline.Name),
-				zap.String("exporter", ref))
-		}
-	}
-	pipeline.Exporters = rs
-
 	return nil
 }
 
-func validatePipelineProcessors(
-	cfg *configmodels.Config,
-	pipeline *configmodels.Pipeline,
-	logger *zap.Logger,
-) error {
+func validatePipelineProcessors(cfg *configmodels.Config, pipeline *configmodels.Pipeline) error {
 	if len(pipeline.Processors) == 0 {
 		return nil
 	}
@@ -794,37 +611,15 @@ func validatePipelineProcessors(
 		if cfg.Processors[ref] == nil {
 			return &configError{
 				code: errPipelineProcessorNotExists,
-				msg:  fmt.Sprintf("pipeline %q references processor %s which does not exists", pipeline.Name, ref),
+				msg:  fmt.Sprintf("pipeline %q references processor %s which does not exist", pipeline.Name, ref),
 			}
 		}
 	}
-
-	// Remove disabled processors.
-	rs := pipeline.Processors[:0]
-	for _, ref := range pipeline.Processors {
-		proc := cfg.Processors[ref]
-		if proc.IsEnabled() {
-			// The processor is enabled. Keep it in the pipeline.
-			rs = append(rs, ref)
-		} else {
-			logger.Info("pipeline references a disabled processor. Ignoring the processor.",
-				zap.String("pipeline", pipeline.Name),
-				zap.String("processor", ref))
-		}
-	}
-	pipeline.Processors = rs
 
 	return nil
 }
 
 func validateReceivers(cfg *configmodels.Config) error {
-	// Remove disabled receivers.
-	for name, rcv := range cfg.Receivers {
-		if !rcv.IsEnabled() {
-			delete(cfg.Receivers, name)
-		}
-	}
-
 	// Currently there is no default receiver enabled. The configuration must specify at least one enabled receiver to
 	// be valid.
 	if len(cfg.Receivers) == 0 {
@@ -837,13 +632,6 @@ func validateReceivers(cfg *configmodels.Config) error {
 }
 
 func validateExporters(cfg *configmodels.Config) error {
-	// Remove disabled exporters.
-	for name, rcv := range cfg.Exporters {
-		if !rcv.IsEnabled() {
-			delete(cfg.Exporters, name)
-		}
-	}
-
 	// There must be at least one enabled exporter to be considered a valid configuration.
 	if len(cfg.Exporters) == 0 {
 		return &configError{
@@ -852,15 +640,6 @@ func validateExporters(cfg *configmodels.Config) error {
 		}
 	}
 	return nil
-}
-
-func validateProcessors(cfg *configmodels.Config) {
-	// Remove disabled processors.
-	for name, rcv := range cfg.Processors {
-		if !rcv.IsEnabled() {
-			delete(cfg.Processors, name)
-		}
-	}
 }
 
 // expandEnvConfig creates a new viper config with expanded values for all the values (simple, list or map value).
@@ -876,7 +655,7 @@ func expandStringValues(value interface{}) interface{} {
 	default:
 		return v
 	case string:
-		return os.ExpandEnv(v)
+		return expandEnv(v)
 	case []interface{}:
 		nslice := make([]interface{}, 0, len(v))
 		for _, vint := range v {
@@ -892,18 +671,62 @@ func expandStringValues(value interface{}) interface{} {
 	}
 }
 
-// Copied from the Viper but changed to use the same delimiter.
+func expandEnv(s string) string {
+	return os.Expand(s, func(str string) string {
+		// This allows escaping environment variable substitution via $$, e.g.
+		// - $FOO will be substituted with env var FOO
+		// - $$FOO will be replaced with $FOO
+		// - $$$FOO will be replaced with $ + substituted env var FOO
+		if str == "$" {
+			return "$"
+		}
+		return os.Getenv(str)
+	})
+}
+
+func unmarshaler(factory component.Factory) component.CustomUnmarshaler {
+	if fu, ok := factory.(component.ConfigUnmarshaler); ok {
+		return fu.Unmarshal
+	}
+
+	if du, ok := factory.(deprecatedUnmarshaler); ok {
+		cu := du.CustomUnmarshaler()
+		if cu != nil {
+			return cu
+		}
+	}
+
+	return defaultUnmarshaler
+}
+
+func defaultUnmarshaler(componentViperSection *viper.Viper, intoCfg interface{}) error {
+	return componentViperSection.UnmarshalExact(intoCfg)
+}
+
+// Copied from the Viper but changed to use the same delimiter
+// and return error if the sub is not a map.
 // See https://github.com/spf13/viper/issues/871
-func viperSub(v *viper.Viper, key string) *viper.Viper {
-	subv := NewViper()
+func ViperSubExact(v *viper.Viper, key string) (*viper.Viper, error) {
 	data := v.Get(key)
 	if data == nil {
-		return subv
+		return NewViper(), nil
 	}
 
 	if reflect.TypeOf(data).Kind() == reflect.Map {
-		subv.MergeConfigMap(cast.ToStringMap(data))
-		return subv
+		subv := NewViper()
+		// Cannot return error because the subv is empty.
+		_ = subv.MergeConfigMap(cast.ToStringMap(data))
+		return subv, nil
 	}
-	return subv
+	return nil, &configError{
+		code: errInvalidSubConfig,
+		msg:  fmt.Sprintf("unexpected sub-config value kind for key:%s value:%v kind:%v)", key, data, reflect.TypeOf(data).Kind()),
+	}
+}
+
+func viperFromStringMap(data map[string]interface{}) *viper.Viper {
+	v := NewViper()
+	// Cannot return error because the subv is empty.
+	_ = v.MergeConfigMap(cast.ToStringMap(data))
+	return v
 }

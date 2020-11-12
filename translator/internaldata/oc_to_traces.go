@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,15 +19,18 @@ import (
 
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	octrace "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
+	"go.opencensus.io/trace"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
-	tracetranslator "github.com/open-telemetry/opentelemetry-collector/translator/trace"
+	"go.opentelemetry.io/collector/consumer/consumerdata"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/translator/conventions"
+	tracetranslator "go.opentelemetry.io/collector/translator/trace"
 )
 
 // OCToTraceData converts OC data format to Traces.
+// Deprecated: use pdata.Traces instead. OCToTraceData may be used only by OpenCensus
+// receiver and exporter implementations.
 func OCToTraceData(td consumerdata.TraceData) pdata.Traces {
 	traceData := pdata.NewTraces()
 	if td.Node == nil && td.Resource == nil && len(td.Spans) == 0 {
@@ -131,31 +134,75 @@ func ocSpanToResourceSpans(ocSpan *octrace.Span, node *occommon.Node, dest pdata
 }
 
 func ocSpanToInternal(src *octrace.Span, dest pdata.Span) {
-	// Note that ocSpanKindToInternal must be called before ocAttrsToInternal
+	// Note that ocSpanKindToInternal must be called before initAttributeMapFromOC
 	// since it may modify src.Attributes (remove the attribute which represents the
 	// span kind).
 	dest.SetKind(ocSpanKindToInternal(src.Kind, src.Attributes))
 
-	dest.SetTraceID(pdata.NewTraceID(src.TraceId))
-	dest.SetSpanID(pdata.NewSpanID(src.SpanId))
+	dest.SetTraceID(traceIDToInternal(src.TraceId))
+	dest.SetSpanID(spanIDToInternal(src.SpanId))
 	dest.SetTraceState(ocTraceStateToInternal(src.Tracestate))
-	dest.SetParentSpanID(pdata.NewSpanID(src.ParentSpanId))
+	dest.SetParentSpanID(spanIDToInternal(src.ParentSpanId))
+
 	dest.SetName(src.Name.GetValue())
-	dest.SetStartTime(internal.TimestampToUnixNano(src.StartTime))
-	dest.SetEndTime(internal.TimestampToUnixNano(src.EndTime))
-	ocAttrsToInternal(src.Attributes, dest.Attributes())
+	dest.SetStartTime(pdata.TimestampToUnixNano(src.StartTime))
+	dest.SetEndTime(pdata.TimestampToUnixNano(src.EndTime))
+
+	ocStatusToInternal(src.Status, src.Attributes, dest.Status())
+
+	initAttributeMapFromOC(src.Attributes, dest.Attributes())
 	dest.SetDroppedAttributesCount(ocAttrsToDroppedAttributes(src.Attributes))
 	ocEventsToInternal(src.TimeEvents, dest)
 	ocLinksToInternal(src.Links, dest)
-	ocStatusToInternal(src.Status, dest.Status())
+	ocSameProcessAsParentSpanToInternal(src.SameProcessAsParentSpan, dest)
 }
 
-func ocStatusToInternal(ocStatus *octrace.Status, dest pdata.SpanStatus) {
+// Transforms the byte slice trace ID into a [16]byte internal pdata.TraceID.
+// If larger input then it is truncated to 16 bytes.
+func traceIDToInternal(traceID []byte) pdata.TraceID {
+	tid := [16]byte{}
+	copy(tid[:], traceID)
+	return pdata.NewTraceID(tid)
+}
+
+// Transforms the byte slice span ID into a [8]byte internal pdata.SpanID.
+// If larger input then it is truncated to 8 bytes.
+func spanIDToInternal(spanID []byte) pdata.SpanID {
+	sid := [8]byte{}
+	copy(sid[:], spanID)
+	return pdata.NewSpanID(sid)
+}
+
+func ocStatusToInternal(ocStatus *octrace.Status, ocAttrs *octrace.Span_Attributes, dest pdata.SpanStatus) {
 	if ocStatus == nil {
 		return
 	}
 	dest.InitEmpty()
-	dest.SetCode(pdata.StatusCode(ocStatus.Code))
+
+	var code pdata.StatusCode
+	switch ocStatus.Code {
+	case trace.StatusCodeOK:
+		code = pdata.StatusCodeUnset
+
+	case trace.StatusCodeUnknown:
+		// It is an error.
+		fallthrough
+
+	default:
+		// all other OC status codes are also errors.
+		code = pdata.StatusCodeError
+	}
+
+	if ocAttrs != nil {
+		// tracetranslator.TagStatusCode is set it must override the status code value.
+		// See the reverse translation in traces_to_oc.go:statusToOC().
+		if attr, ok := ocAttrs.AttributeMap[tracetranslator.TagStatusCode]; ok {
+			code = pdata.StatusCode(attr.GetIntValue())
+			delete(ocAttrs.AttributeMap, tracetranslator.TagStatusCode)
+		}
+	}
+
+	dest.SetCode(code)
 	dest.SetMessage(ocStatus.Message)
 }
 
@@ -184,39 +231,33 @@ func ocAttrsToDroppedAttributes(ocAttrs *octrace.Span_Attributes) uint32 {
 	return uint32(ocAttrs.DroppedAttributesCount)
 }
 
-func ocAttrsToInternal(ocAttrs *octrace.Span_Attributes, dest pdata.AttributeMap) {
+// initAttributeMapFromOC initialize AttributeMap from OC attributes
+func initAttributeMapFromOC(ocAttrs *octrace.Span_Attributes, dest pdata.AttributeMap) {
 	if ocAttrs == nil {
 		return
 	}
 
-	attrCount := len(ocAttrs.AttributeMap)
-	attrMap := make(map[string]pdata.AttributeValue, attrCount)
-	if attrCount > 0 {
-		values := pdata.NewAttributeValueSlice(attrCount)
-		i := 0
+	if len(ocAttrs.AttributeMap) > 0 {
+		dest.InitEmptyWithCapacity(len(ocAttrs.AttributeMap))
 		for key, ocAttr := range ocAttrs.AttributeMap {
 			switch attribValue := ocAttr.Value.(type) {
 			case *octrace.AttributeValue_StringValue:
-				values[i].SetStringVal(attribValue.StringValue.GetValue())
+				dest.UpsertString(key, attribValue.StringValue.GetValue())
 
 			case *octrace.AttributeValue_IntValue:
-				values[i].SetIntVal(attribValue.IntValue)
+				dest.UpsertInt(key, attribValue.IntValue)
 
 			case *octrace.AttributeValue_BoolValue:
-				values[i].SetBoolVal(attribValue.BoolValue)
+				dest.UpsertBool(key, attribValue.BoolValue)
 
 			case *octrace.AttributeValue_DoubleValue:
-				values[i].SetDoubleVal(attribValue.DoubleValue)
+				dest.UpsertDouble(key, attribValue.DoubleValue)
 
 			default:
-				str := "<Unknown OpenCensus attribute value type>"
-				values[i].SetStringVal(str)
+				dest.UpsertString(key, "<Unknown OpenCensus attribute value type>")
 			}
-			attrMap[key] = values[i]
-			i++
 		}
 	}
-	dest.InitFromMap(attrMap)
 }
 
 func ocSpanKindToInternal(ocKind octrace.Span_SpanKind, ocAttrs *octrace.Span_Attributes) pdata.SpanKind {
@@ -242,6 +283,8 @@ func ocSpanKindToInternal(ocKind octrace.Span_SpanKind, ocAttrs *octrace.Span_At
 						otlpKind = pdata.SpanKindCONSUMER
 					case tracetranslator.OpenTracingSpanKindProducer:
 						otlpKind = pdata.SpanKindPRODUCER
+					case tracetranslator.OpenTracingSpanKindInternal:
+						otlpKind = pdata.SpanKindINTERNAL
 					default:
 						return pdata.SpanKindUNSPECIFIED
 					}
@@ -281,13 +324,13 @@ func ocEventsToInternal(ocEvents *octrace.Span_TimeEvents, dest pdata.Span) {
 		event := events.At(i)
 		i++
 
-		event.SetTimestamp(internal.TimestampToUnixNano(ocEvent.Time))
+		event.SetTimestamp(pdata.TimestampToUnixNano(ocEvent.Time))
 
 		switch teValue := ocEvent.Value.(type) {
 		case *octrace.Span_TimeEvent_Annotation_:
 			if teValue.Annotation != nil {
 				event.SetName(teValue.Annotation.Description.GetValue())
-				ocAttrsToInternal(teValue.Annotation.Attributes, event.Attributes())
+				initAttributeMapFromOC(teValue.Annotation.Attributes, event.Attributes())
 				event.SetDroppedAttributesCount(ocAttrsToDroppedAttributes(teValue.Annotation.Attributes))
 			}
 
@@ -328,10 +371,10 @@ func ocLinksToInternal(ocLinks *octrace.Span_Links, dest pdata.Span) {
 		link := links.At(i)
 		i++
 
-		link.SetTraceID(pdata.NewTraceID(ocLink.TraceId))
-		link.SetSpanID(pdata.NewSpanID(ocLink.SpanId))
+		link.SetTraceID(traceIDToInternal(ocLink.TraceId))
+		link.SetSpanID(spanIDToInternal(ocLink.SpanId))
 		link.SetTraceState(ocTraceStateToInternal(ocLink.Tracestate))
-		ocAttrsToInternal(ocLink.Attributes, link.Attributes())
+		initAttributeMapFromOC(ocLink.Attributes, link.Attributes())
 		link.SetDroppedAttributesCount(ocAttrsToDroppedAttributes(ocLink.Attributes))
 	}
 
@@ -344,16 +387,15 @@ func ocMessageEventToInternalAttrs(msgEvent *octrace.Span_TimeEvent_MessageEvent
 		return
 	}
 
-	attrs := pdata.NewAttributeValueSlice(4)
-	attrs[0].SetStringVal(msgEvent.Type.String())
-	attrs[1].SetIntVal(int64(msgEvent.Id))
-	attrs[2].SetIntVal(int64(msgEvent.UncompressedSize))
-	attrs[3].SetIntVal(int64(msgEvent.CompressedSize))
+	dest.UpsertString(conventions.OCTimeEventMessageEventType, msgEvent.Type.String())
+	dest.UpsertInt(conventions.OCTimeEventMessageEventID, int64(msgEvent.Id))
+	dest.UpsertInt(conventions.OCTimeEventMessageEventUSize, int64(msgEvent.UncompressedSize))
+	dest.UpsertInt(conventions.OCTimeEventMessageEventCSize, int64(msgEvent.CompressedSize))
+}
 
-	dest.InitFromMap(map[string]pdata.AttributeValue{
-		conventions.OCTimeEventMessageEventType:  attrs[0],
-		conventions.OCTimeEventMessageEventID:    attrs[1],
-		conventions.OCTimeEventMessageEventUSize: attrs[2],
-		conventions.OCTimeEventMessageEventCSize: attrs[3],
-	})
+func ocSameProcessAsParentSpanToInternal(spaps *wrapperspb.BoolValue, dest pdata.Span) {
+	if spaps == nil {
+		return
+	}
+	dest.Attributes().UpsertBool(conventions.OCAttributeSameProcessAsParentSpan, spaps.Value)
 }

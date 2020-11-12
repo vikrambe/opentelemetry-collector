@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,9 +15,9 @@
 package testdata
 
 import (
-	otlpcommon "github.com/open-telemetry/opentelemetry-proto/gen/go/common/v1"
+	otlpcommon "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/common/v1"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
+	"go.opentelemetry.io/collector/consumer/pdata"
 )
 
 var (
@@ -44,11 +44,11 @@ func initResourceAttributes1(dest pdata.AttributeMap) {
 	dest.InitFromMap(resourceAttributes1)
 }
 
-func generateOtlpResourceAttributes1() []*otlpcommon.AttributeKeyValue {
-	return []*otlpcommon.AttributeKeyValue{
+func generateOtlpResourceAttributes1() []otlpcommon.KeyValue {
+	return []otlpcommon.KeyValue{
 		{
-			Key:         "resource-attr",
-			StringValue: "resource-attr-val-1",
+			Key:   "resource-attr",
+			Value: &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "resource-attr-val-1"}},
 		},
 	}
 }
@@ -57,11 +57,11 @@ func initResourceAttributes2(dest pdata.AttributeMap) {
 	dest.InitFromMap(resourceAttributes2)
 }
 
-func generateOtlpResourceAttributes2() []*otlpcommon.AttributeKeyValue {
-	return []*otlpcommon.AttributeKeyValue{
+func generateOtlpResourceAttributes2() []otlpcommon.KeyValue {
+	return []otlpcommon.KeyValue{
 		{
-			Key:         "resource-attr",
-			StringValue: "resource-attr-val-2",
+			Key:   "resource-attr",
+			Value: &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "resource-attr-val-2"}},
 		},
 	}
 }
@@ -70,11 +70,11 @@ func initSpanAttributes(dest pdata.AttributeMap) {
 	dest.InitFromMap(spanAttributes)
 }
 
-func generateOtlpSpanAttributes() []*otlpcommon.AttributeKeyValue {
-	return []*otlpcommon.AttributeKeyValue{
+func generateOtlpSpanAttributes() []otlpcommon.KeyValue {
+	return []otlpcommon.KeyValue{
 		{
-			Key:         "span-attr",
-			StringValue: "span-attr-val",
+			Key:   "span-attr",
+			Value: &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "span-attr-val"}},
 		},
 	}
 }
@@ -83,11 +83,11 @@ func initSpanEventAttributes(dest pdata.AttributeMap) {
 	dest.InitFromMap(spanEventAttributes)
 }
 
-func generateOtlpSpanEventAttributes() []*otlpcommon.AttributeKeyValue {
-	return []*otlpcommon.AttributeKeyValue{
+func generateOtlpSpanEventAttributes() []otlpcommon.KeyValue {
+	return []otlpcommon.KeyValue{
 		{
-			Key:         "span-event-attr",
-			StringValue: "span-event-attr-val",
+			Key:   "span-event-attr",
+			Value: &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "span-event-attr-val"}},
 		},
 	}
 }
@@ -96,11 +96,11 @@ func initSpanLinkAttributes(dest pdata.AttributeMap) {
 	dest.InitFromMap(spanLinkAttributes)
 }
 
-func generateOtlpSpanLinkAttributes() []*otlpcommon.AttributeKeyValue {
-	return []*otlpcommon.AttributeKeyValue{
+func generateOtlpSpanLinkAttributes() []otlpcommon.KeyValue {
+	return []otlpcommon.KeyValue{
 		{
-			Key:         "span-link-attr",
-			StringValue: "span-link-attr-val",
+			Key:   "span-link-attr",
+			Value: &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "span-link-attr-val"}},
 		},
 	}
 }
@@ -109,23 +109,10 @@ func initMetricLabels1(dest pdata.StringMap) {
 	dest.InitFromMap(map[string]string{TestLabelKey1: TestLabelValue1})
 }
 
-func generateOtlpMetricLabels1() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
+func generateOtlpMetricLabels1() []otlpcommon.StringKeyValue {
+	return []otlpcommon.StringKeyValue{
 		{
 			Key:   TestLabelKey1,
-			Value: TestLabelValue1,
-		},
-	}
-}
-
-func initMetricLabelValue1(dest pdata.StringMap) {
-	dest.InitFromMap(map[string]string{TestLabelKey: TestLabelValue1})
-}
-
-func generateOtlpMetricLabelValue1() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
-		{
-			Key:   TestLabelKey,
 			Value: TestLabelValue1,
 		},
 	}
@@ -135,8 +122,8 @@ func initMetricLabels12(dest pdata.StringMap) {
 	dest.InitFromMap(map[string]string{TestLabelKey1: TestLabelValue1, TestLabelKey2: TestLabelValue2}).Sort()
 }
 
-func generateOtlpMetricLabels12() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
+func generateOtlpMetricLabels12() []otlpcommon.StringKeyValue {
+	return []otlpcommon.StringKeyValue{
 		{
 			Key:   TestLabelKey1,
 			Value: TestLabelValue1,
@@ -152,8 +139,8 @@ func initMetricLabels13(dest pdata.StringMap) {
 	dest.InitFromMap(map[string]string{TestLabelKey1: TestLabelValue1, TestLabelKey3: TestLabelValue3}).Sort()
 }
 
-func generateOtlpMetricLabels13() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
+func generateOtlpMetricLabels13() []otlpcommon.StringKeyValue {
+	return []otlpcommon.StringKeyValue{
 		{
 			Key:   TestLabelKey1,
 			Value: TestLabelValue1,
@@ -169,37 +156,11 @@ func initMetricLabels2(dest pdata.StringMap) {
 	dest.InitFromMap(map[string]string{TestLabelKey2: TestLabelValue2})
 }
 
-func generateOtlpMetricLabels2() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
+func generateOtlpMetricLabels2() []otlpcommon.StringKeyValue {
+	return []otlpcommon.StringKeyValue{
 		{
 			Key:   TestLabelKey2,
 			Value: TestLabelValue2,
-		},
-	}
-}
-
-func initMetricLabelValue2(dest pdata.StringMap) {
-	dest.InitFromMap(map[string]string{TestLabelKey: TestLabelValue2})
-}
-
-func generateOtlpMetricLabelValue2() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
-		{
-			Key:   TestLabelKey,
-			Value: TestLabelValue2,
-		},
-	}
-}
-
-func initMetricLabels3(dest pdata.StringMap) {
-	dest.InitFromMap(map[string]string{TestLabelKey3: TestLabelValue3})
-}
-
-func generateOtlpMetricLabels3() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
-		{
-			Key:   TestLabelKey3,
-			Value: TestLabelValue3,
 		},
 	}
 }
@@ -208,8 +169,8 @@ func initMetricAttachment(dest pdata.StringMap) {
 	dest.InitFromMap(map[string]string{TestAttachmentKey: TestAttachmentValue})
 }
 
-func generateOtlpMetricAttachment() []*otlpcommon.StringKeyValue {
-	return []*otlpcommon.StringKeyValue{
+func generateOtlpMetricAttachment() []otlpcommon.StringKeyValue {
+	return []otlpcommon.StringKeyValue{
 		{
 			Key:   TestAttachmentKey,
 			Value: TestAttachmentValue,

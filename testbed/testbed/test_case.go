@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,7 +15,6 @@
 package testbed
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -24,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCase defines a running test case.
@@ -47,13 +46,14 @@ type TestCase struct {
 	resourceSpec ResourceSpec
 
 	// Agent process.
-	agentProc childProcess
+	agentProc OtelcolRunner
 
 	Sender   DataSender
 	Receiver DataReceiver
 
 	LoadGenerator *LoadGenerator
 	MockBackend   *MockBackend
+	validator     TestCaseValidator
 
 	startTime time.Time
 
@@ -69,6 +69,8 @@ type TestCase struct {
 	doneSignal chan struct{}
 
 	errorCause string
+
+	resultsSummary TestResultsSummary
 }
 
 const mibibyte = 1024 * 1024
@@ -77,8 +79,12 @@ const testcaseDurationVar = "TESTCASE_DURATION"
 // NewTestCase creates a new TestCase. It expects agent-config.yaml in the specified directory.
 func NewTestCase(
 	t *testing.T,
+	dataProvider DataProvider,
 	sender DataSender,
 	receiver DataReceiver,
+	agentProc OtelcolRunner,
+	validator TestCaseValidator,
+	resultsSummary TestResultsSummary,
 	opts ...TestCaseOption,
 ) *TestCase {
 	tc := TestCase{}
@@ -89,6 +95,9 @@ func NewTestCase(
 	tc.startTime = time.Now()
 	tc.Sender = sender
 	tc.Receiver = receiver
+	tc.agentProc = agentProc
+	tc.validator = validator
+	tc.resultsSummary = resultsSummary
 
 	// Get requested test case duration from env variable.
 	duration := os.Getenv(testcaseDurationVar)
@@ -108,13 +117,8 @@ func NewTestCase(
 
 	// Prepare directory for results.
 	tc.resultDir, err = filepath.Abs(path.Join("results", t.Name()))
-	if err != nil {
-		t.Fatalf("Cannot resolve %s: %v", t.Name(), err)
-	}
-	err = os.MkdirAll(tc.resultDir, os.ModePerm)
-	if err != nil {
-		t.Fatalf("Cannot create directory %s: %v", tc.resultDir, err)
-	}
+	require.NoErrorf(t, err, "Cannot resolve %s", t.Name())
+	require.NoErrorf(t, os.MkdirAll(tc.resultDir, os.ModePerm), "Cannot create directory %s", tc.resultDir)
 
 	// Set default resource check period.
 	tc.resourceSpec.ResourceCheckPeriod = 3 * time.Second
@@ -123,22 +127,8 @@ func NewTestCase(
 		tc.resourceSpec.ResourceCheckPeriod = tc.Duration
 	}
 
-	configFile := tc.agentConfigFile
-	if configFile == "" {
-		// Use the default config file.
-		configFile = path.Join("testdata", "agent-config.yaml")
-	}
-
-	// Ensure that the config file is an absolute path.
-	tc.agentConfigFile, err = filepath.Abs(configFile)
-	if err != nil {
-		tc.t.Fatalf("Cannot resolve filename: %s", err.Error())
-	}
-
-	tc.LoadGenerator, err = NewLoadGenerator(sender)
-	if err != nil {
-		t.Fatalf("Cannot create generator: %s", err.Error())
-	}
+	tc.LoadGenerator, err = NewLoadGenerator(dataProvider, sender)
+	require.NoError(t, err, "Cannot create generator")
 
 	tc.MockBackend = NewMockBackend(tc.composeTestResultFileName("backend.log"), receiver)
 
@@ -149,9 +139,7 @@ func NewTestCase(
 
 func (tc *TestCase) composeTestResultFileName(fileName string) string {
 	fileName, err := filepath.Abs(path.Join(tc.resultDir, fileName))
-	if err != nil {
-		tc.t.Fatalf("Cannot resolve %s: %s", fileName, err.Error())
-	}
+	require.NoError(tc.t, err, "Cannot resolve %s", fileName)
 	return fileName
 }
 
@@ -174,15 +162,16 @@ func (tc *TestCase) SetResourceLimits(resourceSpec ResourceSpec) {
 // StartAgent starts the agent and redirects its standard output and standard error
 // to "agent.log" file located in the test directory.
 func (tc *TestCase) StartAgent(args ...string) {
-	args = append(args, "--config")
-	args = append(args, tc.agentConfigFile)
+	if tc.agentConfigFile != "" {
+		args = append(args, "--config")
+		args = append(args, tc.agentConfigFile)
+	}
 	logFileName := tc.composeTestResultFileName("agent.log")
 
-	err := tc.agentProc.start(startParams{
-		name:         "Agent",
-		logFilePath:  logFileName,
-		cmd:          testBedConfig.Agent,
-		cmdArgs:      args,
+	err := tc.agentProc.Start(StartParams{
+		Name:         "Agent",
+		LogFilePath:  logFileName,
+		CmdArgs:      args,
 		resourceSpec: &tc.resourceSpec,
 	})
 
@@ -193,24 +182,28 @@ func (tc *TestCase) StartAgent(args ...string) {
 
 	// Start watching resource consumption.
 	go func() {
-		err := tc.agentProc.watchResourceConsumption()
+		err := tc.agentProc.WatchResourceConsumption()
 		if err != nil {
 			tc.indicateError(err)
 		}
 	}()
 
-	// Wait for agent to start. We consider the agent started when we can
-	// connect to the port to which we intend to send load.
-	tc.WaitFor(func() bool {
-		_, err := net.Dial("tcp",
-			fmt.Sprintf("localhost:%d", tc.LoadGenerator.sender.GetCollectorPort()))
-		return err == nil
-	})
+	endpoint := tc.LoadGenerator.sender.GetEndpoint()
+	if endpoint != "" {
+		// Wait for agent to start. We consider the agent started when we can
+		// connect to the port to which we intend to send load. We only do this
+		// if the endpoint is not-empty, i.e. the sender does use network (some senders
+		// like text log writers don't).
+		tc.WaitFor(func() bool {
+			_, err := net.Dial("tcp", tc.LoadGenerator.sender.GetEndpoint())
+			return err == nil
+		})
+	}
 }
 
 // StopAgent stops agent process.
 func (tc *TestCase) StopAgent() {
-	tc.agentProc.stop()
+	tc.agentProc.Stop()
 }
 
 // StartLoad starts the load generator and redirects its standard output and standard error
@@ -226,9 +219,7 @@ func (tc *TestCase) StopLoad() {
 
 // StartBackend starts the specified backend type.
 func (tc *TestCase) StartBackend() {
-	if err := tc.MockBackend.Start(); err != nil {
-		tc.t.Fatalf("Cannot start backend: %s", err.Error())
-	}
+	require.NoError(tc.t, tc.MockBackend.Start(), "Cannot start backend")
 }
 
 // StopBackend stops the backend.
@@ -244,7 +235,7 @@ func (tc *TestCase) EnableRecording() {
 // AgentMemoryInfo returns raw memory info struct about the agent
 // as returned by github.com/shirou/gopsutil/process
 func (tc *TestCase) AgentMemoryInfo() (uint32, uint32, error) {
-	stat, err := tc.agentProc.processMon.MemoryInfo()
+	stat, err := tc.agentProc.GetProcessMon().MemoryInfo()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -266,35 +257,11 @@ func (tc *TestCase) Stop() {
 	}
 
 	// Report test results
-
-	rc := tc.agentProc.GetTotalConsumption()
-
-	var result string
-	if tc.t.Failed() {
-		result = "FAIL"
-	} else {
-		result = "PASS"
-	}
-
-	// Remove "Test" prefix from test name.
-	testName := tc.t.Name()[4:]
-
-	results.Add(tc.t.Name(), &TestResult{
-		testName:          testName,
-		result:            result,
-		receivedSpanCount: tc.MockBackend.DataItemsReceived(),
-		sentSpanCount:     tc.LoadGenerator.DataItemsSent(),
-		duration:          time.Since(tc.startTime),
-		cpuPercentageAvg:  rc.CPUPercentAvg,
-		cpuPercentageMax:  rc.CPUPercentMax,
-		ramMibAvg:         rc.RAMMiBAvg,
-		ramMibMax:         rc.RAMMiBMax,
-		errorCause:        tc.errorCause,
-	})
+	tc.validator.RecordResults(tc)
 }
 
-// ValidateData validates data by comparing the number of items sent by load generator
-// and number of items received by mock backend.
+// ValidateData validates data received by mock backend against what was generated and sent to the collector
+// instance(s) under test by the LoadGenerator.
 func (tc *TestCase) ValidateData() {
 	select {
 	case <-tc.ErrorSignal:
@@ -303,10 +270,7 @@ func (tc *TestCase) ValidateData() {
 	default:
 	}
 
-	if assert.EqualValues(tc.t, tc.LoadGenerator.DataItemsSent(), tc.MockBackend.DataItemsReceived(),
-		"Received and sent counters do not match.") {
-		log.Printf("Sent and received data matches.")
-	}
+	tc.validator.Validate(tc)
 }
 
 // Sleep for specified duration or until error is signaled.
@@ -340,7 +304,7 @@ func (tc *TestCase) WaitForN(cond func() bool, duration time.Duration, errMsg ..
 
 		// Increase waiting interval exponentially up to 500 ms.
 		if waitInterval < time.Millisecond*500 {
-			waitInterval = waitInterval * 2
+			waitInterval *= 2
 		}
 
 		if time.Since(startTime) > duration {
@@ -370,7 +334,7 @@ func (tc *TestCase) indicateError(err error) {
 }
 
 func (tc *TestCase) logStats() {
-	t := time.NewTicker(1 * time.Second)
+	t := time.NewTicker(tc.resourceSpec.ResourceCheckPeriod)
 	defer t.Stop()
 
 	for {
@@ -384,7 +348,7 @@ func (tc *TestCase) logStats() {
 }
 
 func (tc *TestCase) logStatsOnce() {
-	log.Printf("%s, %s, %s",
+	log.Printf("%s | %s | %s",
 		tc.agentProc.GetResourceConsumption(),
 		tc.LoadGenerator.GetStats(),
 		tc.MockBackend.GetStats())

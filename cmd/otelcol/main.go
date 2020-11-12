@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,33 +17,43 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
-	"github.com/open-telemetry/opentelemetry-collector/internal/version"
-	"github.com/open-telemetry/opentelemetry-collector/service"
-	"github.com/open-telemetry/opentelemetry-collector/service/defaultcomponents"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/internal/version"
+	"go.opentelemetry.io/collector/service"
+	"go.opentelemetry.io/collector/service/defaultcomponents"
 )
 
 func main() {
-	handleErr := func(message string, err error) {
-		if err != nil {
-			log.Fatalf("%s: %v", message, err)
-		}
+	factories, err := defaultcomponents.Components()
+	if err != nil {
+		log.Fatalf("failed to build default components: %v", err)
 	}
 
-	factories, err := defaultcomponents.Components()
-	handleErr("Failed to build default components", err)
-
-	info := service.ApplicationStartInfo{
+	info := component.ApplicationStartInfo{
 		ExeName:  "otelcol",
 		LongName: "OpenTelemetry Collector",
 		Version:  version.Version,
 		GitHash:  version.GitHash,
 	}
 
-	svc, err := service.New(service.Parameters{ApplicationStartInfo: info, Factories: factories})
-	handleErr("Failed to construct the application", err)
+	if err := run(service.Parameters{ApplicationStartInfo: info, Factories: factories}); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	err = svc.Start()
-	handleErr("Application run finished with error", err)
+func runInteractive(params service.Parameters) error {
+	app, err := service.New(params)
+	if err != nil {
+		return fmt.Errorf("failed to construct the application: %w", err)
+	}
+
+	err = app.Run()
+	if err != nil {
+		return fmt.Errorf("application run finished with error: %w", err)
+	}
+
+	return nil
 }

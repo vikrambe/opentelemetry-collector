@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,10 +18,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/internal/collector/telemetry"
+	"go.opentelemetry.io/collector/processor/processorhelper"
 )
 
 const (
@@ -32,42 +33,17 @@ const (
 	defaultTimeout       = 200 * time.Millisecond
 )
 
-// Factory is the factory for batch processor.
-type Factory struct {
+// NewFactory returns a new factory for the Batch processor.
+func NewFactory() component.ProcessorFactory {
+	return processorhelper.NewFactory(
+		typeStr,
+		createDefaultConfig,
+		processorhelper.WithTraces(createTraceProcessor),
+		processorhelper.WithMetrics(createMetricsProcessor),
+		processorhelper.WithLogs(createLogsProcessor))
 }
 
-// Type gets the type of the config created by this factory.
-func (f *Factory) Type() string {
-	return typeStr
-}
-
-// CreateDefaultConfig creates the default configuration for processor.
-func (f *Factory) CreateDefaultConfig() configmodels.Processor {
-	return generateDefaultConfig()
-}
-
-// CreateTraceProcessor creates a trace processor based on this config.
-func (f *Factory) CreateTraceProcessor(
-	ctx context.Context,
-	params component.ProcessorCreateParams,
-	nextConsumer consumer.TraceConsumer,
-	c configmodels.Processor,
-) (component.TraceProcessor, error) {
-	cfg := c.(*Config)
-	return newBatchProcessor(params, nextConsumer, cfg), nil
-}
-
-// CreateMetricsProcessor creates a metrics processor based on this config.
-func (f *Factory) CreateMetricsProcessor(
-	ctx context.Context,
-	params component.ProcessorCreateParams,
-	nextConsumer consumer.MetricsConsumer,
-	cfg configmodels.Processor,
-) (component.MetricsProcessor, error) {
-	return nil, configerror.ErrDataTypeIsNotSupported
-}
-
-func generateDefaultConfig() *Config {
+func createDefaultConfig() configmodels.Processor {
 	return &Config{
 		ProcessorSettings: configmodels.ProcessorSettings{
 			TypeVal: typeStr,
@@ -76,4 +52,38 @@ func generateDefaultConfig() *Config {
 		SendBatchSize: defaultSendBatchSize,
 		Timeout:       defaultTimeout,
 	}
+}
+
+func createTraceProcessor(
+	_ context.Context,
+	params component.ProcessorCreateParams,
+	cfg configmodels.Processor,
+	nextConsumer consumer.TracesConsumer,
+) (component.TracesProcessor, error) {
+	oCfg := cfg.(*Config)
+	// error can be ignored, level is parsed at the service startup
+	level, _ := telemetry.GetLevel()
+	return newBatchTracesProcessor(params, nextConsumer, oCfg, level), nil
+}
+
+func createMetricsProcessor(
+	_ context.Context,
+	params component.ProcessorCreateParams,
+	cfg configmodels.Processor,
+	nextConsumer consumer.MetricsConsumer,
+) (component.MetricsProcessor, error) {
+	oCfg := cfg.(*Config)
+	level, _ := telemetry.GetLevel()
+	return newBatchMetricsProcessor(params, nextConsumer, oCfg, level), nil
+}
+
+func createLogsProcessor(
+	_ context.Context,
+	params component.ProcessorCreateParams,
+	cfg configmodels.Processor,
+	nextConsumer consumer.LogsConsumer,
+) (component.LogsProcessor, error) {
+	oCfg := cfg.(*Config)
+	level, _ := telemetry.GetLevel()
+	return newBatchLogsProcessor(params, nextConsumer, oCfg, level), nil
 }

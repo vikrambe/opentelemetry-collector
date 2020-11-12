@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,7 +25,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"go.opentelemetry.io/collector/component"
 )
 
 type pprofExtension struct {
@@ -34,7 +34,7 @@ type pprofExtension struct {
 	server http.Server
 }
 
-func (p *pprofExtension) Start(ctx context.Context, host component.Host) error {
+func (p *pprofExtension) Start(_ context.Context, host component.Host) error {
 	// Start the listener here so we can have earlier failure if port is
 	// already in use.
 	ln, err := net.Listen("tcp", p.config.Endpoint)
@@ -71,11 +71,9 @@ func (p *pprofExtension) Shutdown(context.Context) error {
 	return p.server.Close()
 }
 
-func newServer(config Config, logger *zap.Logger) (*pprofExtension, error) {
-	p := &pprofExtension{
+func newServer(config Config, logger *zap.Logger) *pprofExtension {
+	return &pprofExtension{
 		config: config,
 		logger: logger,
 	}
-
-	return p, nil
 }

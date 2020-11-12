@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -43,7 +43,7 @@ func TestNewStrictFilterSet(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fs, err := NewStrictFilterSet(test.filters)
+			fs, err := NewFilterSet(test.filters)
 			assert.Equal(t, test.success, fs != nil)
 			assert.Equal(t, test.success, err == nil)
 		})
@@ -51,9 +51,9 @@ func TestNewStrictFilterSet(t *testing.T) {
 }
 
 func TestStrictMatches(t *testing.T) {
-	fs, err := NewStrictFilterSet(validStrictFilters)
+	fs, err := NewFilterSet(validStrictFilters)
 	assert.NotNil(t, fs)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	matches := []string{
 		"exact_string_match",

@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,37 +15,71 @@
 package internaldata
 
 import (
+	"time"
+
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
-	"github.com/golang/protobuf/ptypes"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/translator/conventions"
 )
+
+var ocLangCodeToLangMap = getOCLangCodeToLangMap()
+
+func getOCLangCodeToLangMap() map[occommon.LibraryInfo_Language]string {
+	mappings := make(map[occommon.LibraryInfo_Language]string)
+	mappings[1] = conventions.AttributeSDKLangValueCPP
+	mappings[2] = conventions.AttributeSDKLangValueDotNET
+	mappings[3] = conventions.AttributeSDKLangValueErlang
+	mappings[4] = conventions.AttributeSDKLangValueGo
+	mappings[5] = conventions.AttributeSDKLangValueJava
+	mappings[6] = conventions.AttributeSDKLangValueNodeJS
+	mappings[7] = conventions.AttributeSDKLangValuePHP
+	mappings[8] = conventions.AttributeSDKLangValuePython
+	mappings[9] = conventions.AttributeSDKLangValueRuby
+	mappings[10] = conventions.AttributeSDKLangValueWebJS
+	return mappings
+}
 
 func ocNodeResourceToInternal(ocNode *occommon.Node, ocResource *ocresource.Resource, dest pdata.Resource) {
 	if ocNode == nil && ocResource == nil {
 		return
 	}
 
-	// Number of special fields in the Node. See the code below that deals with special fields.
-	const specialNodeAttrCount = 7
+	// Number of special fields in OC that will be translated to Attributes
+	const serviceInfoAttrCount = 1     // Number of Node.ServiceInfo fields.
+	const nodeIdentifierAttrCount = 3  // Number of Node.Identifier fields.
+	const libraryInfoAttrCount = 3     // Number of Node.LibraryInfo fields.
+	const specialResourceAttrCount = 1 // Number of Resource fields.
 
-	// Number of special fields in the Resource.
-	const specialResourceAttrCount = 1
-
-	// Calculate maximum total number of attributes. It is OK if we are a bit higher than
-	// the exact number since this is only needed for capacity reservation.
+	// Calculate maximum total number of attributes for capacity reservation.
 	maxTotalAttrCount := 0
 	if ocNode != nil {
-		maxTotalAttrCount += len(ocNode.Attributes) + specialNodeAttrCount
+		maxTotalAttrCount += len(ocNode.Attributes)
+		if ocNode.ServiceInfo != nil {
+			maxTotalAttrCount += serviceInfoAttrCount
+		}
+		if ocNode.Identifier != nil {
+			maxTotalAttrCount += nodeIdentifierAttrCount
+		}
+		if ocNode.LibraryInfo != nil {
+			maxTotalAttrCount += libraryInfoAttrCount
+		}
 	}
 	if ocResource != nil {
-		maxTotalAttrCount += len(ocResource.Labels) + specialResourceAttrCount
+		maxTotalAttrCount += len(ocResource.Labels)
+		if ocResource.Type != "" {
+			maxTotalAttrCount += specialResourceAttrCount
+		}
 	}
 
-	dest.InitEmpty()
+	// There are no attributes to be set.
+	if maxTotalAttrCount == 0 {
+		return
+	}
+
 	attrs := dest.Attributes()
+	attrs.InitEmptyWithCapacity(maxTotalAttrCount)
 
 	if ocNode != nil {
 		// Copy all Attributes.
@@ -61,7 +95,7 @@ func ocNodeResourceToInternal(ocNode *occommon.Node, ocResource *ocresource.Reso
 		}
 		if ocNode.Identifier != nil {
 			if ocNode.Identifier.StartTimestamp != nil {
-				attrs.UpsertString(conventions.OCAttributeProcessStartTime, ptypes.TimestampString(ocNode.Identifier.StartTimestamp))
+				attrs.UpsertString(conventions.OCAttributeProcessStartTime, ocNode.Identifier.StartTimestamp.AsTime().Format(time.RFC3339Nano))
 			}
 			if ocNode.Identifier.HostName != "" {
 				attrs.UpsertString(conventions.AttributeHostHostname, ocNode.Identifier.HostName)
@@ -72,13 +106,15 @@ func ocNodeResourceToInternal(ocNode *occommon.Node, ocResource *ocresource.Reso
 		}
 		if ocNode.LibraryInfo != nil {
 			if ocNode.LibraryInfo.CoreLibraryVersion != "" {
-				attrs.UpsertString(conventions.AttributeLibraryVersion, ocNode.LibraryInfo.CoreLibraryVersion)
+				attrs.UpsertString(conventions.AttributeTelemetrySDKVersion, ocNode.LibraryInfo.CoreLibraryVersion)
 			}
 			if ocNode.LibraryInfo.ExporterVersion != "" {
 				attrs.UpsertString(conventions.OCAttributeExporterVersion, ocNode.LibraryInfo.ExporterVersion)
 			}
 			if ocNode.LibraryInfo.Language != occommon.LibraryInfo_LANGUAGE_UNSPECIFIED {
-				attrs.UpsertString(conventions.AttributeLibraryLanguage, ocNode.LibraryInfo.Language.String())
+				if str, ok := ocLangCodeToLangMap[ocNode.LibraryInfo.Language]; ok {
+					attrs.UpsertString(conventions.AttributeTelemetrySDKLanguage, str)
+				}
 			}
 		}
 	}

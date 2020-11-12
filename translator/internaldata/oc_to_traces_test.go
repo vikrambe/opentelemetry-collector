@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,18 +15,22 @@
 package internaldata
 
 import (
+	"strconv"
 	"testing"
 
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
 	octrace "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
-	"github.com/golang/protobuf/ptypes"
-	otlptrace "github.com/open-telemetry/opentelemetry-proto/gen/go/trace/v1"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/data/testdata"
+	"go.opentelemetry.io/collector/consumer/consumerdata"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	otlptrace "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/trace/v1"
+	"go.opentelemetry.io/collector/internal/data/testdata"
+	"go.opentelemetry.io/collector/translator/conventions"
 )
 
 func TestOcTraceStateToInternal(t *testing.T) {
@@ -50,15 +54,15 @@ func TestOcTraceStateToInternal(t *testing.T) {
 	assert.EqualValues(t, "abc=def,123=4567", ocTraceStateToInternal(tracestate))
 }
 
-func TestOcAttrsToInternal(t *testing.T) {
+func TestInitAttributeMapFromOC(t *testing.T) {
 	attrs := pdata.NewAttributeMap()
-	ocAttrsToInternal(nil, attrs)
+	initAttributeMapFromOC(nil, attrs)
 	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
 	assert.EqualValues(t, 0, ocAttrsToDroppedAttributes(nil))
 
 	ocAttrs := &octrace.Span_Attributes{}
 	attrs = pdata.NewAttributeMap()
-	ocAttrsToInternal(ocAttrs, attrs)
+	initAttributeMapFromOC(ocAttrs, attrs)
 	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
 	assert.EqualValues(t, 0, ocAttrsToDroppedAttributes(ocAttrs))
 
@@ -66,7 +70,7 @@ func TestOcAttrsToInternal(t *testing.T) {
 		DroppedAttributesCount: 123,
 	}
 	attrs = pdata.NewAttributeMap()
-	ocAttrsToInternal(ocAttrs, attrs)
+	initAttributeMapFromOC(ocAttrs, attrs)
 	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
 	assert.EqualValues(t, 123, ocAttrsToDroppedAttributes(ocAttrs))
 
@@ -75,7 +79,7 @@ func TestOcAttrsToInternal(t *testing.T) {
 		DroppedAttributesCount: 234,
 	}
 	attrs = pdata.NewAttributeMap()
-	ocAttrsToInternal(ocAttrs, attrs)
+	initAttributeMapFromOC(ocAttrs, attrs)
 	assert.EqualValues(t, pdata.NewAttributeMap(), attrs)
 	assert.EqualValues(t, 234, ocAttrsToDroppedAttributes(ocAttrs))
 
@@ -88,7 +92,7 @@ func TestOcAttrsToInternal(t *testing.T) {
 		DroppedAttributesCount: 234,
 	}
 	attrs = pdata.NewAttributeMap()
-	ocAttrsToInternal(ocAttrs, attrs)
+	initAttributeMapFromOC(ocAttrs, attrs)
 	assert.EqualValues(t,
 		pdata.NewAttributeMap().InitFromMap(
 			map[string]pdata.AttributeValue{
@@ -107,7 +111,7 @@ func TestOcAttrsToInternal(t *testing.T) {
 		Value: &octrace.AttributeValue_DoubleValue{DoubleValue: 4.5},
 	}
 	attrs = pdata.NewAttributeMap()
-	ocAttrsToInternal(ocAttrs, attrs)
+	initAttributeMapFromOC(ocAttrs, attrs)
 
 	expectedAttr := pdata.NewAttributeMap().InitFromMap(map[string]pdata.AttributeValue{
 		"abc":       pdata.NewAttributeValueString("def"),
@@ -127,11 +131,11 @@ func TestOcSpanKindToInternal(t *testing.T) {
 	}{
 		{
 			ocKind:   octrace.Span_CLIENT,
-			otlpKind: otlptrace.Span_CLIENT,
+			otlpKind: otlptrace.Span_SPAN_KIND_CLIENT,
 		},
 		{
 			ocKind:   octrace.Span_SERVER,
-			otlpKind: otlptrace.Span_SERVER,
+			otlpKind: otlptrace.Span_SPAN_KIND_SERVER,
 		},
 		{
 			ocKind:   octrace.Span_SPAN_KIND_UNSPECIFIED,
@@ -145,7 +149,7 @@ func TestOcSpanKindToInternal(t *testing.T) {
 						StringValue: &octrace.TruncatableString{Value: "consumer"}}},
 				},
 			},
-			otlpKind: otlptrace.Span_CONSUMER,
+			otlpKind: otlptrace.Span_SPAN_KIND_CONSUMER,
 		},
 		{
 			ocKind: octrace.Span_SPAN_KIND_UNSPECIFIED,
@@ -155,7 +159,7 @@ func TestOcSpanKindToInternal(t *testing.T) {
 						StringValue: &octrace.TruncatableString{Value: "producer"}}},
 				},
 			},
-			otlpKind: otlptrace.Span_PRODUCER,
+			otlpKind: otlptrace.Span_SPAN_KIND_PRODUCER,
 		},
 		{
 			ocKind: octrace.Span_SPAN_KIND_UNSPECIFIED,
@@ -175,7 +179,17 @@ func TestOcSpanKindToInternal(t *testing.T) {
 						StringValue: &octrace.TruncatableString{Value: "consumer"}}},
 				},
 			},
-			otlpKind: otlptrace.Span_CLIENT,
+			otlpKind: otlptrace.Span_SPAN_KIND_CLIENT,
+		},
+		{
+			ocKind: octrace.Span_SPAN_KIND_UNSPECIFIED,
+			ocAttrs: &octrace.Span_Attributes{
+				AttributeMap: map[string]*octrace.AttributeValue{
+					"span.kind": {Value: &octrace.AttributeValue_StringValue{
+						StringValue: &octrace.TruncatableString{Value: "internal"}}},
+				},
+			},
+			otlpKind: otlptrace.Span_SPAN_KIND_INTERNAL,
 		},
 	}
 
@@ -192,12 +206,9 @@ func TestOcToInternal(t *testing.T) {
 	ocResource1 := &ocresource.Resource{Labels: map[string]string{"resource-attr": "resource-attr-val-1"}}
 	ocResource2 := &ocresource.Resource{Labels: map[string]string{"resource-attr": "resource-attr-val-2"}}
 
-	startTime, err := ptypes.TimestampProto(testdata.TestSpanStartTime)
-	assert.NoError(t, err)
-	eventTime, err := ptypes.TimestampProto(testdata.TestSpanEventTime)
-	assert.NoError(t, err)
-	endTime, err := ptypes.TimestampProto(testdata.TestSpanEndTime)
-	assert.NoError(t, err)
+	startTime := timestamppb.New(testdata.TestSpanStartTime)
+	eventTime := timestamppb.New(testdata.TestSpanEventTime)
+	endTime := timestamppb.New(testdata.TestSpanEndTime)
 
 	ocSpan1 := &octrace.Span{
 		Name:      &octrace.TruncatableString{Value: "operationA"},
@@ -242,6 +253,10 @@ func TestOcToInternal(t *testing.T) {
 		},
 		Status: &octrace.Status{Message: "status-cancelled", Code: 1},
 	}
+
+	// TODO: Create another unit test fully covering ocSpanToInternal
+	ocSpanZeroedParentID := proto.Clone(ocSpan1).(*octrace.Span)
+	ocSpanZeroedParentID.ParentSpanId = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 
 	ocSpan2 := &octrace.Span{
 		Name:      &octrace.TruncatableString{Value: "operationB"},
@@ -301,7 +316,7 @@ func TestOcToInternal(t *testing.T) {
 
 		{
 			name: "one-empty-resource-spans",
-			td:   wrapTraceWithEmptyResource(testdata.GenerateTraceDataOneEmptyResourceSpans()),
+			td:   testdata.GenerateTraceDataOneEmptyResourceSpans(),
 			oc:   consumerdata.TraceData{Node: ocNode},
 		},
 
@@ -313,7 +328,7 @@ func TestOcToInternal(t *testing.T) {
 
 		{
 			name: "one-span-no-resource",
-			td:   wrapTraceWithEmptyResource(testdata.GenerateTraceDataOneSpanNoResource()),
+			td:   testdata.GenerateTraceDataOneSpanNoResource(),
 			oc: consumerdata.TraceData{
 				Node:     ocNode,
 				Resource: &ocresource.Resource{},
@@ -328,6 +343,16 @@ func TestOcToInternal(t *testing.T) {
 				Node:     ocNode,
 				Resource: ocResource1,
 				Spans:    []*octrace.Span{ocSpan1},
+			},
+		},
+
+		{
+			name: "one-span-zeroed-parent-id",
+			td:   testdata.GenerateTraceDataOneSpan(),
+			oc: consumerdata.TraceData{
+				Node:     ocNode,
+				Resource: ocResource1,
+				Spans:    []*octrace.Span{ocSpanZeroedParentID},
 			},
 		},
 
@@ -372,13 +397,14 @@ func TestOcToInternal(t *testing.T) {
 		},
 	}
 
-	// Extra test:
+	// Extra tests:
 	//	* "two-spans-and-separate-in-the-middle"
+	//	* "one-span-zeroed-parent-id"
 	// Missing tests (impossible to generate):
 	//  * GenerateTraceDataOneEmptyOneNilResourceSpans
 	//	* GenerateTraceDataOneEmptyInstrumentationLibrary
 	//	* GenerateTraceDataOneEmptyOneNilInstrumentationLibrary
-	assert.EqualValues(t, testdata.NumTraceTests-2, len(tests))
+	assert.EqualValues(t, testdata.NumTraceTests-1, len(tests))
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -387,8 +413,83 @@ func TestOcToInternal(t *testing.T) {
 	}
 }
 
-// TODO: Try to avoid unnecessary Resource object allocation.
-func wrapTraceWithEmptyResource(td pdata.Traces) pdata.Traces {
-	td.ResourceSpans().At(0).Resource().InitEmpty()
-	return td
+func TestOcSameProcessAsParentSpanToInternal(t *testing.T) {
+	span := pdata.NewSpan()
+	span.InitEmpty()
+	ocSameProcessAsParentSpanToInternal(nil, span)
+	assert.Equal(t, 0, span.Attributes().Len())
+
+	ocSameProcessAsParentSpanToInternal(wrapperspb.Bool(false), span)
+	assert.Equal(t, 1, span.Attributes().Len())
+	v, ok := span.Attributes().Get(conventions.OCAttributeSameProcessAsParentSpan)
+	assert.True(t, ok)
+	assert.EqualValues(t, pdata.AttributeValueBOOL, v.Type())
+	assert.False(t, v.BoolVal())
+
+	ocSameProcessAsParentSpanToInternal(wrapperspb.Bool(true), span)
+	assert.Equal(t, 1, span.Attributes().Len())
+	v, ok = span.Attributes().Get(conventions.OCAttributeSameProcessAsParentSpan)
+	assert.True(t, ok)
+	assert.EqualValues(t, pdata.AttributeValueBOOL, v.Type())
+	assert.True(t, v.BoolVal())
+}
+
+func BenchmarkSpansWithAttributesOCToInternal(b *testing.B) {
+	ocSpan := generateSpanWithAttributes(15)
+
+	ocTraceData := consumerdata.TraceData{
+		Resource: generateOCTestResource(),
+		Spans: []*octrace.Span{
+			ocSpan,
+		},
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		OCToTraceData(ocTraceData)
+	}
+}
+
+func BenchmarkSpansWithAttributesUnmarshal(b *testing.B) {
+	ocSpan := generateSpanWithAttributes(15)
+
+	bytes, err := proto.Marshal(ocSpan)
+	if err != nil {
+		b.Fail()
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		unmarshalOc := &octrace.Span{}
+		if err := proto.Unmarshal(bytes, unmarshalOc); err != nil {
+			b.Fail()
+		}
+		if len(unmarshalOc.Attributes.AttributeMap) != 15 {
+			b.Fail()
+		}
+	}
+}
+
+func generateSpanWithAttributes(len int) *octrace.Span {
+	startTime := timestamppb.New(testdata.TestSpanStartTime)
+	endTime := timestamppb.New(testdata.TestSpanEndTime)
+	ocSpan2 := &octrace.Span{
+		Name:      &octrace.TruncatableString{Value: "operationB"},
+		StartTime: startTime,
+		EndTime:   endTime,
+		Attributes: &octrace.Span_Attributes{
+			DroppedAttributesCount: 3,
+		},
+	}
+
+	ocSpan2.Attributes.AttributeMap = make(map[string]*octrace.AttributeValue, len)
+	ocAttr := ocSpan2.Attributes.AttributeMap
+	for i := 0; i < len; i++ {
+		ocAttr["span-link-attr_"+strconv.Itoa(i)] = &octrace.AttributeValue{
+			Value: &octrace.AttributeValue_StringValue{
+				StringValue: &octrace.TruncatableString{Value: "span-link-attr-val"},
+			},
+		}
+	}
+	return ocSpan2
 }

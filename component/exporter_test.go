@@ -1,10 +1,10 @@
-// Copyright  OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,12 +15,13 @@
 package component
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/configerror"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 type TestExporterFactory struct {
@@ -28,8 +29,8 @@ type TestExporterFactory struct {
 }
 
 // Type gets the type of the Exporter config created by this factory.
-func (f *TestExporterFactory) Type() string {
-	return f.name
+func (f *TestExporterFactory) Type() configmodels.Type {
+	return configmodels.Type(f.name)
 }
 
 // CreateDefaultConfig creates the default configuration for the Exporter.
@@ -38,50 +39,52 @@ func (f *TestExporterFactory) CreateDefaultConfig() configmodels.Exporter {
 }
 
 // CreateTraceExporter creates a trace exporter based on this config.
-func (f *TestExporterFactory) CreateTraceExporter(logger *zap.Logger, cfg configmodels.Exporter) (TraceExporterOld, error) {
-	return nil, nil
+func (f *TestExporterFactory) CreateTracesExporter(context.Context, ExporterCreateParams, configmodels.Exporter) (TracesExporter, error) {
+	return nil, configerror.ErrDataTypeIsNotSupported
 }
 
 // CreateMetricsExporter creates a metrics exporter based on this config.
-func (f *TestExporterFactory) CreateMetricsExporter(logger *zap.Logger, cfg configmodels.Exporter) (MetricsExporterOld, error) {
-	return nil, nil
+func (f *TestExporterFactory) CreateMetricsExporter(context.Context, ExporterCreateParams, configmodels.Exporter) (MetricsExporter, error) {
+	return nil, configerror.ErrDataTypeIsNotSupported
+}
+
+// CreateMetricsExporter creates a logs exporter based on this config.
+func (f *TestExporterFactory) CreateLogsExporter(context.Context, ExporterCreateParams, configmodels.Exporter) (LogsExporter, error) {
+	return nil, configerror.ErrDataTypeIsNotSupported
 }
 
 func TestBuildExporters(t *testing.T) {
 	type testCase struct {
-		in  []ExporterFactoryBase
-		out map[string]ExporterFactoryBase
-		err bool
+		in  []ExporterFactory
+		out map[configmodels.Type]ExporterFactory
 	}
 
 	testCases := []testCase{
 		{
-			in: []ExporterFactoryBase{
+			in: []ExporterFactory{
 				&TestExporterFactory{"exp1"},
 				&TestExporterFactory{"exp2"},
 			},
-			out: map[string]ExporterFactoryBase{
+			out: map[configmodels.Type]ExporterFactory{
 				"exp1": &TestExporterFactory{"exp1"},
 				"exp2": &TestExporterFactory{"exp2"},
 			},
-			err: false,
 		},
 		{
-			in: []ExporterFactoryBase{
+			in: []ExporterFactory{
 				&TestExporterFactory{"exp1"},
 				&TestExporterFactory{"exp1"},
 			},
-			err: true,
 		},
 	}
 
 	for _, c := range testCases {
 		out, err := MakeExporterFactoryMap(c.in...)
-		if c.err {
-			assert.NotNil(t, err)
+		if c.out == nil {
+			assert.Error(t, err)
 			continue
 		}
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, c.out, out)
 	}
 }

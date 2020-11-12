@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,20 +23,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/testutils"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configcheck"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/testutil"
 )
 
-func TestFactory_Type(t *testing.T) {
-	factory := Factory{}
-	require.Equal(t, typeStr, factory.Type())
-}
-
 func TestFactory_CreateDefaultConfig(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig()
+	cfg := createDefaultConfig()
 	assert.Equal(t, &Config{
 		ExtensionSettings: configmodels.ExtensionSettings{
 			NameVal: typeStr,
@@ -47,7 +41,7 @@ func TestFactory_CreateDefaultConfig(t *testing.T) {
 		cfg)
 
 	assert.NoError(t, configcheck.ValidateConfig(cfg))
-	ext, err := factory.CreateExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
+	ext, err := createExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, ext)
 
@@ -56,11 +50,10 @@ func TestFactory_CreateDefaultConfig(t *testing.T) {
 }
 
 func TestFactory_CreateExtension(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig().(*Config)
-	cfg.Port = testutils.GetAvailablePort(t)
+	cfg := createDefaultConfig().(*Config)
+	cfg.Port = testutil.GetAvailablePort(t)
 
-	ext, err := factory.CreateExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
+	ext, err := createExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, ext)
 
@@ -69,15 +62,14 @@ func TestFactory_CreateExtension(t *testing.T) {
 }
 
 func TestFactory_CreateExtensionOnlyOnce(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig().(*Config)
-	cfg.Port = testutils.GetAvailablePort(t)
+	cfg := createDefaultConfig().(*Config)
+	cfg.Port = testutil.GetAvailablePort(t)
 
-	ext, err := factory.CreateExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
+	ext, err := createExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, ext)
 
-	ext1, err := factory.CreateExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
+	ext1, err := createExtension(context.Background(), component.ExtensionCreateParams{Logger: zap.NewNop()}, cfg)
 	require.Error(t, err)
 	require.Nil(t, ext1)
 

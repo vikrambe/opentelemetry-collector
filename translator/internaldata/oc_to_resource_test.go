@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,22 +21,22 @@ import (
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	agenttracepb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/trace/v1"
 	ocresource "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
-	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/translator/conventions"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/translator/conventions"
 )
 
 func TestOcNodeResourceToInternal(t *testing.T) {
 	resource := pdata.NewResource()
 	ocNodeResourceToInternal(nil, nil, resource)
-	assert.EqualValues(t, true, resource.IsNil())
+	assert.Equal(t, 0, resource.Attributes().Len())
 
 	ocNode := &occommon.Node{}
 	ocResource := &ocresource.Resource{}
 	ocNodeResourceToInternal(ocNode, ocResource, resource)
-	assert.EqualValues(t, false, resource.IsNil())
+	assert.Equal(t, 0, resource.Attributes().Len())
 
 	ocNode = generateOcNode()
 	ocResource = generateOcResource()
@@ -84,15 +84,15 @@ func BenchmarkOcResourceNodeUnmarshal(b *testing.B) {
 		Resource: generateOcResource(),
 	}
 
-	buf := &proto.Buffer{}
-	if err := buf.Marshal(oc); err != nil {
+	bytes, err := proto.Marshal(oc)
+	if err != nil {
 		b.Fail()
 	}
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		unmarshalOc := &agenttracepb.ExportTraceServiceRequest{}
-		if err := proto.Unmarshal(buf.Bytes(), unmarshalOc); err != nil {
+		if err := proto.Unmarshal(bytes, unmarshalOc); err != nil {
 			b.Fail()
 		}
 		if unmarshalOc.Node.Identifier.Pid != 123 {

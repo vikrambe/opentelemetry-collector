@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,23 +21,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/internal/processor/filterspan"
-	"github.com/open-telemetry/opentelemetry-collector/processor"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/internal/processor/filterspan"
 )
 
 type spanProcessor struct {
-	nextConsumer     consumer.TraceConsumer
 	config           Config
 	toAttributeRules []toAttributeRule
 	include          filterspan.Matcher
 	exclude          filterspan.Matcher
 }
-
-var _ component.TraceProcessor = (*spanProcessor)(nil)
 
 // toAttributeRule is the compiled equivalent of config.ToAttributes field.
 type toAttributeRule struct {
@@ -49,11 +42,7 @@ type toAttributeRule struct {
 }
 
 // newSpanProcessor returns the span processor.
-func newSpanProcessor(nextConsumer consumer.TraceConsumer, config Config) (*spanProcessor, error) {
-	if nextConsumer == nil {
-		return nil, componenterror.ErrNilNextConsumer
-	}
-
+func newSpanProcessor(config Config) (*spanProcessor, error) {
 	include, err := filterspan.NewMatcher(config.Include)
 	if err != nil {
 		return nil, err
@@ -64,10 +53,9 @@ func newSpanProcessor(nextConsumer consumer.TraceConsumer, config Config) (*span
 	}
 
 	sp := &spanProcessor{
-		nextConsumer: nextConsumer,
-		config:       config,
-		include:      include,
-		exclude:      exclude,
+		config:  config,
+		include: include,
+		exclude: exclude,
 	}
 
 	// Compile ToAttributes regexp and extract attributes names.
@@ -91,28 +79,29 @@ func newSpanProcessor(nextConsumer consumer.TraceConsumer, config Config) (*span
 	return sp, nil
 }
 
-func (sp *spanProcessor) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
+func (sp *spanProcessor) ProcessTraces(_ context.Context, td pdata.Traces) (pdata.Traces, error) {
 	rss := td.ResourceSpans()
 	for i := 0; i < rss.Len(); i++ {
 		rs := rss.At(i)
 		if rs.IsNil() {
 			continue
 		}
-		serviceName := processor.ServiceNameForResource(rs.Resource())
-		ilss := rss.At(i).InstrumentationLibrarySpans()
+		ilss := rs.InstrumentationLibrarySpans()
+		resource := rs.Resource()
 		for j := 0; j < ilss.Len(); j++ {
 			ils := ilss.At(j)
 			if ils.IsNil() {
 				continue
 			}
 			spans := ils.Spans()
+			library := ils.InstrumentationLibrary()
 			for k := 0; k < spans.Len(); k++ {
 				s := spans.At(k)
 				if s.IsNil() {
 					continue
 				}
 
-				if sp.skipSpan(s, serviceName) {
+				if filterspan.SkipSpan(sp.include, sp.exclude, s, resource, library) {
 					continue
 				}
 				sp.processFromAttributes(s)
@@ -120,21 +109,7 @@ func (sp *spanProcessor) ConsumeTraces(ctx context.Context, td pdata.Traces) err
 			}
 		}
 	}
-	return sp.nextConsumer.ConsumeTraces(ctx, td)
-}
-
-func (sp *spanProcessor) GetCapabilities() component.ProcessorCapabilities {
-	return component.ProcessorCapabilities{MutatesConsumedData: true}
-}
-
-// Start is invoked during service startup.
-func (sp *spanProcessor) Start(_ context.Context, _ component.Host) error {
-	return nil
-}
-
-// Shutdown is invoked during service shutdown.
-func (sp *spanProcessor) Shutdown(context.Context) error {
-	return nil
+	return td, nil
 }
 
 func (sp *spanProcessor) processFromAttributes(span pdata.Span) {
@@ -144,7 +119,7 @@ func (sp *spanProcessor) processFromAttributes(span pdata.Span) {
 	}
 
 	attrs := span.Attributes()
-	if attrs.Cap() == 0 {
+	if attrs.Len() == 0 {
 		// There are no attributes to create span name from.
 		return
 	}
@@ -152,7 +127,7 @@ func (sp *spanProcessor) processFromAttributes(span pdata.Span) {
 	// Note: There was a separate proposal for creating the string.
 	// With benchmarking, strings.Builder is faster than the proposal.
 	// For full context, refer to this PR comment:
-	// https://github.com/open-telemetry/opentelemetry-collector/pull/301#discussion_r318357678
+	// https://go.opentelemetry.io/collector/pull/301#discussion_r318357678
 	var sb strings.Builder
 	for i, key := range sp.config.Rename.FromAttributes {
 		attr, found := attrs.Get(key)
@@ -253,28 +228,4 @@ func (sp *spanProcessor) processToAttributes(span pdata.Span) {
 			break
 		}
 	}
-}
-
-// skipSpan determines if a span should be processed.
-// True is returned when a span should be skipped.
-// False is returned when a span should not be skipped.
-// The logic determining if a span should be processed is set
-// in the attribute configuration with the include and exclude settings.
-// Include properties are checked before exclude settings are checked.
-func (sp *spanProcessor) skipSpan(span pdata.Span, serviceName string) bool {
-	if sp.include != nil {
-		// A false returned in this case means the span should not be processed.
-		if include := sp.include.MatchSpan(span, serviceName); !include {
-			return true
-		}
-	}
-
-	if sp.exclude != nil {
-		// A true returned in this case means the span should not be processed.
-		if exclude := sp.exclude.MatchSpan(span, serviceName); exclude {
-			return true
-		}
-	}
-
-	return false
 }

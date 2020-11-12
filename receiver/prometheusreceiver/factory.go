@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,14 +19,14 @@ import (
 	"errors"
 	"fmt"
 
+	_ "github.com/prometheus/prometheus/discovery/install" // init() of this package registers service discovery impl.
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v2"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/receiver/receiverhelper"
 )
 
 // This file implements config for Prometheus receiver.
@@ -43,22 +43,15 @@ var (
 	errNilScrapeConfig = errors.New("expecting a non-nil ScrapeConfig")
 )
 
-// Factory is the factory for receiver.
-type Factory struct {
+func NewFactory() component.ReceiverFactory {
+	return receiverhelper.NewFactory(
+		typeStr,
+		createDefaultConfig,
+		receiverhelper.WithMetrics(createMetricsReceiver),
+		receiverhelper.WithCustomUnmarshaler(customUnmarshaler))
 }
 
-// Type gets the type of the Receiver config created by this factory.
-func (f *Factory) Type() string {
-	return typeStr
-}
-
-// CustomUnmarshaler returns custom unmarshaler for this config.
-func (f *Factory) CustomUnmarshaler() component.CustomUnmarshaler {
-	return CustomUnmarshalerFunc
-}
-
-// CustomUnmarshalerFunc performs custom unmarshaling of config.
-func CustomUnmarshalerFunc(componentViperSection *viper.Viper, intoCfg interface{}) error {
+func customUnmarshaler(componentViperSection *viper.Viper, intoCfg interface{}) error {
 	if componentViperSection == nil {
 		return nil
 	}
@@ -91,37 +84,24 @@ func CustomUnmarshalerFunc(componentViperSection *viper.Viper, intoCfg interface
 	return nil
 }
 
-// CreateDefaultConfig creates the default configuration for receiver.
-func (f *Factory) CreateDefaultConfig() configmodels.Receiver {
+func createDefaultConfig() configmodels.Receiver {
 	return &Config{
 		ReceiverSettings: configmodels.ReceiverSettings{
-			TypeVal:  typeStr,
-			NameVal:  typeStr,
-			Endpoint: "localhost:9090",
+			TypeVal: typeStr,
+			NameVal: typeStr,
 		},
 	}
 }
 
-// CreateTraceReceiver creates a trace receiver based on provided config.
-func (f *Factory) CreateTraceReceiver(
-	ctx context.Context,
-	logger *zap.Logger,
+func createMetricsReceiver(
+	_ context.Context,
+	params component.ReceiverCreateParams,
 	cfg configmodels.Receiver,
-	nextConsumer consumer.TraceConsumerOld,
-) (component.TraceReceiver, error) {
-	// Prometheus does not support traces
-	return nil, configerror.ErrDataTypeIsNotSupported
-}
-
-// CreateMetricsReceiver creates a metrics receiver based on provided config.
-func (f *Factory) CreateMetricsReceiver(
-	logger *zap.Logger,
-	cfg configmodels.Receiver,
-	consumer consumer.MetricsConsumerOld,
+	nextConsumer consumer.MetricsConsumer,
 ) (component.MetricsReceiver, error) {
 	config := cfg.(*Config)
 	if config.PrometheusConfig == nil || len(config.PrometheusConfig.ScrapeConfigs) == 0 {
 		return nil, errNilScrapeConfig
 	}
-	return newPrometheusReceiver(logger, config, consumer), nil
+	return newPrometheusReceiver(params.Logger, config, nextConsumer), nil
 }

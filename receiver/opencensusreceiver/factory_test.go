@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,44 +23,49 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
-	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
-	"github.com/open-telemetry/opentelemetry-collector/receiver"
-	"github.com/open-telemetry/opentelemetry-collector/testutils"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configcheck"
+	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/confignet"
+	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/testutil"
 )
 
 func TestCreateDefaultConfig(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig()
+	cfg := createDefaultConfig()
 	assert.NotNil(t, cfg, "failed to create default config")
 	assert.NoError(t, configcheck.ValidateConfig(cfg))
 }
 
 func TestCreateReceiver(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig()
+	cfg := createDefaultConfig()
 
 	config := cfg.(*Config)
-	config.Endpoint = testutils.GetAvailableLocalAddress(t)
+	config.NetAddr.Endpoint = testutil.GetAvailableLocalAddress(t)
 
-	tReceiver, err := factory.CreateTraceReceiver(context.Background(), zap.NewNop(), cfg, nil)
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	tReceiver, err := createTraceReceiver(context.Background(), params, cfg, nil)
 	assert.NotNil(t, tReceiver)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
-	mReceiver, err := factory.CreateMetricsReceiver(zap.NewNop(), cfg, nil)
+	mReceiver, err := createMetricsReceiver(context.Background(), params, cfg, nil)
 	assert.NotNil(t, mReceiver)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func TestCreateTraceReceiver(t *testing.T) {
-	factory := Factory{}
-	endpoint := testutils.GetAvailableLocalAddress(t)
 	defaultReceiverSettings := configmodels.ReceiverSettings{
-		TypeVal:  typeStr,
-		NameVal:  typeStr,
-		Endpoint: endpoint,
+		TypeVal: typeStr,
+		NameVal: typeStr,
+	}
+	defaultNetAddr := confignet.NetAddr{
+		Endpoint:  testutil.GetAvailableLocalAddress(t),
+		Transport: "tcp",
+	}
+	defaultGRPCSettings := configgrpc.GRPCServerSettings{
+		NetAddr: defaultNetAddr,
 	}
 	tests := []struct {
 		name    string
@@ -70,66 +75,68 @@ func TestCreateTraceReceiver(t *testing.T) {
 		{
 			name: "default",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: defaultReceiverSettings,
-					TLSCredentials:   nil,
-				},
-				Transport: "tcp",
+				ReceiverSettings:   defaultReceiverSettings,
+				GRPCServerSettings: defaultGRPCSettings,
 			},
 		},
 		{
 			name: "invalid_port",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: configmodels.ReceiverSettings{
-						TypeVal:  typeStr,
-						NameVal:  typeStr,
-						Endpoint: "localhost:112233",
+				ReceiverSettings: configmodels.ReceiverSettings{
+					TypeVal: typeStr,
+					NameVal: typeStr,
+				},
+				GRPCServerSettings: configgrpc.GRPCServerSettings{
+					NetAddr: confignet.NetAddr{
+						Endpoint:  "localhost:112233",
+						Transport: "tcp",
 					},
 				},
-				Transport: "tcp",
 			},
 			wantErr: true,
 		},
 		{
 			name: "max-msg-size-and-concurrent-connections",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: defaultReceiverSettings,
+				ReceiverSettings: defaultReceiverSettings,
+				GRPCServerSettings: configgrpc.GRPCServerSettings{
+					NetAddr:              defaultNetAddr,
+					MaxRecvMsgSizeMiB:    32,
+					MaxConcurrentStreams: 16,
 				},
-				Transport:            "tcp",
-				MaxRecvMsgSizeMiB:    32,
-				MaxConcurrentStreams: 16,
 			},
 		},
 	}
 	ctx := context.Background()
-	logger := zap.NewNop()
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink := new(exportertest.SinkTraceExporterOld)
-			tr, err := factory.CreateTraceReceiver(ctx, logger, tt.cfg, sink)
+			tr, err := createTraceReceiver(ctx, params, tt.cfg, consumertest.NewTracesNop())
 			if (err != nil) != tt.wantErr {
-				t.Errorf("factory.CreateTraceReceiver() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("factory.CreateTracesReceiver() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tr != nil {
-				err := tr.Start(context.Background(), componenttest.NewNopHost())
-				require.NoError(t, err, "Start() error = %v", err)
-				tr.Shutdown(context.Background())
+				require.NoError(t, tr.Start(context.Background(), componenttest.NewNopHost()))
+				require.NoError(t, tr.Shutdown(context.Background()))
 			}
 		})
 	}
 }
 
 func TestCreateMetricReceiver(t *testing.T) {
-	factory := Factory{}
-	endpoint := testutils.GetAvailableLocalAddress(t)
 	defaultReceiverSettings := configmodels.ReceiverSettings{
-		TypeVal:  typeStr,
-		NameVal:  typeStr,
-		Endpoint: endpoint,
+		TypeVal: typeStr,
+		NameVal: typeStr,
 	}
+	defaultNetAddr := confignet.NetAddr{
+		Endpoint:  testutil.GetAvailableLocalAddress(t),
+		Transport: "tcp",
+	}
+	defaultGRPCSettings := configgrpc.GRPCServerSettings{
+		NetAddr: defaultNetAddr,
+	}
+
 	tests := []struct {
 		name    string
 		cfg     *Config
@@ -138,58 +145,56 @@ func TestCreateMetricReceiver(t *testing.T) {
 		{
 			name: "default",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: defaultReceiverSettings,
-				},
-				Transport: "tcp",
+				ReceiverSettings:   defaultReceiverSettings,
+				GRPCServerSettings: defaultGRPCSettings,
 			},
 		},
 		{
 			name: "invalid_address",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: configmodels.ReceiverSettings{
-						TypeVal:  typeStr,
-						NameVal:  typeStr,
-						Endpoint: "327.0.0.1:1122",
+				ReceiverSettings: configmodels.ReceiverSettings{
+					TypeVal: typeStr,
+					NameVal: typeStr,
+				},
+				GRPCServerSettings: configgrpc.GRPCServerSettings{
+					NetAddr: confignet.NetAddr{
+						Endpoint:  "327.0.0.1:1122",
+						Transport: "tcp",
 					},
 				},
-				Transport: "tcp",
 			},
 			wantErr: true,
 		},
 		{
 			name: "keepalive",
 			cfg: &Config{
-				SecureReceiverSettings: receiver.SecureReceiverSettings{
-					ReceiverSettings: defaultReceiverSettings,
-				},
-				Transport: "tcp",
-				Keepalive: &serverParametersAndEnforcementPolicy{
-					ServerParameters: &keepaliveServerParameters{
-						MaxConnectionAge: 60 * time.Second,
-					},
-					EnforcementPolicy: &keepaliveEnforcementPolicy{
-						MinTime:             30 * time.Second,
-						PermitWithoutStream: true,
+				ReceiverSettings: defaultReceiverSettings,
+				GRPCServerSettings: configgrpc.GRPCServerSettings{
+					NetAddr: defaultNetAddr,
+					Keepalive: &configgrpc.KeepaliveServerConfig{
+						ServerParameters: &configgrpc.KeepaliveServerParameters{
+							MaxConnectionAge: 60 * time.Second,
+						},
+						EnforcementPolicy: &configgrpc.KeepaliveEnforcementPolicy{
+							MinTime:             30 * time.Second,
+							PermitWithoutStream: true,
+						},
 					},
 				},
 			},
 		},
 	}
-	logger := zap.NewNop()
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink := new(exportertest.SinkMetricsExporterOld)
-			tc, err := factory.CreateMetricsReceiver(logger, tt.cfg, sink)
+			tc, err := createMetricsReceiver(context.Background(), params, tt.cfg, consumertest.NewMetricsNop())
 			if (err != nil) != tt.wantErr {
 				t.Errorf("factory.CreateMetricsReceiver() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tc != nil {
-				err := tc.Start(context.Background(), componenttest.NewNopHost())
-				require.NoError(t, err, "Start() error = %v", err)
-				tc.Shutdown(context.Background())
+				require.NoError(t, tc.Start(context.Background(), componenttest.NewNopHost()))
+				require.NoError(t, tc.Shutdown(context.Background()))
 			}
 		})
 	}

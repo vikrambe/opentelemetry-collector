@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,12 +18,10 @@ import (
 	"context"
 	"strconv"
 
-	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
-
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenterror"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/pdata"
 )
 
 // samplingPriority has the semantic result of parsing the "sampling.priority"
@@ -51,14 +49,14 @@ const (
 )
 
 type tracesamplerprocessor struct {
-	nextConsumer       consumer.TraceConsumerOld
+	nextConsumer       consumer.TracesConsumer
 	scaledSamplingRate uint32
 	hashSeed           uint32
 }
 
-// newTraceProcessor returns a processor.TraceProcessor that will perform head sampling according to the given
+// newTraceProcessor returns a processor.TracesProcessor that will perform head sampling according to the given
 // configuration.
-func newTraceProcessor(nextConsumer consumer.TraceConsumerOld, cfg Config) (component.TraceProcessorOld, error) {
+func newTraceProcessor(nextConsumer consumer.TracesConsumer, cfg Config) (component.TracesProcessor, error) {
 	if nextConsumer == nil {
 		return nil, componenterror.ErrNilNextConsumer
 	}
@@ -71,39 +69,56 @@ func newTraceProcessor(nextConsumer consumer.TraceConsumerOld, cfg Config) (comp
 	}, nil
 }
 
-func (tsp *tracesamplerprocessor) ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error {
-	scaledSamplingRate := tsp.scaledSamplingRate
-
-	sampledTraceData := consumerdata.TraceData{
-		Node:         td.Node,
-		Resource:     td.Resource,
-		SourceFormat: td.SourceFormat,
-	}
-
-	sampledSpans := make([]*tracepb.Span, 0, len(td.Spans))
-	for _, span := range td.Spans {
-		sp := parseSpanSamplingPriority(span)
-		if sp == doNotSampleSpan {
-			// The OpenTelemetry mentions this as a "hint" we take a stronger
-			// approach and do not sample the span since some may use it to
-			// remove specific spans from traces.
+func (tsp *tracesamplerprocessor) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
+	rspans := td.ResourceSpans()
+	sampledTraceData := pdata.NewTraces()
+	for i := 0; i < rspans.Len(); i++ {
+		rspan := rspans.At(i)
+		if rspan.IsNil() {
 			continue
 		}
+		tsp.processTraces(rspan, sampledTraceData)
+	}
+	return tsp.nextConsumer.ConsumeTraces(ctx, sampledTraceData)
+}
 
-		// If one assumes random trace ids hashing may seems avoidable, however, traces can be coming from sources
-		// with various different criteria to generate trace id and perhaps were already sampled without hashing.
-		// Hashing here prevents bias due to such systems.
-		sampled := sp == mustSampleSpan ||
-			hash(span.TraceId, tsp.hashSeed)&bitMaskHashBuckets < scaledSamplingRate
+func (tsp *tracesamplerprocessor) processTraces(resourceSpans pdata.ResourceSpans, sampledTraceData pdata.Traces) {
+	scaledSamplingRate := tsp.scaledSamplingRate
 
-		if sampled {
-			sampledSpans = append(sampledSpans, span)
+	sampledTraceData.ResourceSpans().Resize(sampledTraceData.ResourceSpans().Len() + 1)
+	rs := sampledTraceData.ResourceSpans().At(sampledTraceData.ResourceSpans().Len() - 1)
+	resourceSpans.Resource().CopyTo(rs.Resource())
+	rs.InstrumentationLibrarySpans().Resize(1)
+	spns := rs.InstrumentationLibrarySpans().At(0).Spans()
+
+	ilss := resourceSpans.InstrumentationLibrarySpans()
+	for j := 0; j < ilss.Len(); j++ {
+		ils := ilss.At(j)
+		if ils.IsNil() {
+			continue
+		}
+		for k := 0; k < ils.Spans().Len(); k++ {
+			span := ils.Spans().At(k)
+			sp := parseSpanSamplingPriority(span)
+			if sp == doNotSampleSpan {
+				// The OpenTelemetry mentions this as a "hint" we take a stronger
+				// approach and do not sample the span since some may use it to
+				// remove specific spans from traces.
+				continue
+			}
+
+			// If one assumes random trace ids hashing may seems avoidable, however, traces can be coming from sources
+			// with various different criteria to generate trace id and perhaps were already sampled without hashing.
+			// Hashing here prevents bias due to such systems.
+			tidBytes := span.TraceID().Bytes()
+			sampled := sp == mustSampleSpan ||
+				hash(tidBytes[:], tsp.hashSeed)&bitMaskHashBuckets < scaledSamplingRate
+
+			if sampled {
+				spns.Append(span)
+			}
 		}
 	}
-
-	sampledTraceData.Spans = sampledSpans
-
-	return tsp.nextConsumer.ConsumeTraceData(ctx, sampledTraceData)
 }
 
 func (tsp *tracesamplerprocessor) GetCapabilities() component.ProcessorCapabilities {
@@ -111,7 +126,7 @@ func (tsp *tracesamplerprocessor) GetCapabilities() component.ProcessorCapabilit
 }
 
 // Start is invoked during service startup.
-func (tsp *tracesamplerprocessor) Start(ctx context.Context, host component.Host) error {
+func (tsp *tracesamplerprocessor) Start(context.Context, component.Host) error {
 	return nil
 }
 
@@ -124,14 +139,17 @@ func (tsp *tracesamplerprocessor) Shutdown(context.Context) error {
 // decide if the span should be sampled or not. The usage of the tag follows the
 // OpenTracing semantic tags:
 // https://github.com/opentracing/specification/blob/master/semantic_conventions.md#span-tags-table
-func parseSpanSamplingPriority(span *tracepb.Span) samplingPriority {
-	attribMap := span.GetAttributes().GetAttributeMap()
-	if attribMap == nil {
+func parseSpanSamplingPriority(span pdata.Span) samplingPriority {
+	if span.IsNil() {
+		return deferDecision
+	}
+	attribMap := span.Attributes()
+	if attribMap.Len() <= 0 {
 		return deferDecision
 	}
 
-	samplingPriorityAttrib := attribMap["sampling.priority"]
-	if samplingPriorityAttrib == nil {
+	samplingPriorityAttrib, ok := attribMap.Get("sampling.priority")
+	if !ok {
 		return deferDecision
 	}
 
@@ -142,23 +160,23 @@ func parseSpanSamplingPriority(span *tracepb.Span) samplingPriority {
 	// using different conventions regarding "sampling.priority". Besides the
 	// client libraries it is also possible that the type was lost in translation
 	// between different formats.
-	switch samplingPriorityAttrib.Value.(type) {
-	case *tracepb.AttributeValue_IntValue:
-		value := samplingPriorityAttrib.GetIntValue()
+	switch samplingPriorityAttrib.Type() {
+	case pdata.AttributeValueINT:
+		value := samplingPriorityAttrib.IntVal()
 		if value == 0 {
 			decision = doNotSampleSpan
 		} else if value > 0 {
 			decision = mustSampleSpan
 		}
-	case *tracepb.AttributeValue_DoubleValue:
-		value := samplingPriorityAttrib.GetDoubleValue()
+	case pdata.AttributeValueDOUBLE:
+		value := samplingPriorityAttrib.DoubleVal()
 		if value == 0.0 {
 			decision = doNotSampleSpan
 		} else if value > 0.0 {
 			decision = mustSampleSpan
 		}
-	case *tracepb.AttributeValue_StringValue:
-		attribVal := samplingPriorityAttrib.GetStringValue().GetValue()
+	case pdata.AttributeValueSTRING:
+		attribVal := samplingPriorityAttrib.StringVal()
 		if value, err := strconv.ParseFloat(attribVal, 64); err == nil {
 			if value == 0.0 {
 				decision = doNotSampleSpan
@@ -171,7 +189,7 @@ func parseSpanSamplingPriority(span *tracepb.Span) samplingPriority {
 	return decision
 }
 
-// hash is a murmur3 hash function, see http://en.wikipedia.org/wiki/MurmurHash.
+// hash is a murmur3 hash function, see http://en.wikipedia.org/wiki/MurmurHash
 func hash(key []byte, seed uint32) (hash uint32) {
 	const (
 		c1 = 0xcc9e2d51
@@ -211,7 +229,7 @@ func hash(key []byte, seed uint32) (hash uint32) {
 		remainingBytes += uint32(key[iByte])
 		remainingBytes *= c1
 		remainingBytes = (remainingBytes << r1) | (remainingBytes >> (32 - r1))
-		remainingBytes = remainingBytes * c2
+		remainingBytes *= c2
 		hash ^= remainingBytes
 	}
 

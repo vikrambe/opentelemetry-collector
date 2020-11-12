@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,22 +16,6 @@ package jaeger
 
 import (
 	"errors"
-)
-
-const (
-	// Jaeger Tags
-	ocTimeEventUnknownType           = "oc.timeevent.unknown.type"
-	ocTimeEventAnnotationDescription = "oc.timeevent.annotation.description"
-	ocTimeEventMessageEventType      = "oc.timeevent.messageevent.type"
-	ocTimeEventMessageEventID        = "oc.timeevent.messageevent.id"
-	ocTimeEventMessageEventUSize     = "oc.timeevent.messageevent.usize"
-	ocTimeEventMessageEventCSize     = "oc.timeevent.messageevent.csize"
-	ocSameProcessAsParentSpan        = "oc.sameprocessasparentspan"
-	ocSpanChildCount                 = "oc.span.childcount"
-	opencensusLanguage               = "opencensus.language"
-	opencensusExporterVersion        = "opencensus.exporterversion"
-	opencensusCoreLibVersion         = "opencensus.corelibversion"
-	opencensusResourceType           = "opencensus.resourcetype"
 )
 
 var (

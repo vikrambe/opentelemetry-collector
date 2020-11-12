@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,4 +25,6 @@ var (
 	errNilPushTraceData = errors.New("nil traceDataPusher")
 	// errNilPushMetricsData is returned when a nil pushMetricsData is given.
 	errNilPushMetricsData = errors.New("nil pushMetricsData")
+	// errNilPushLogsData is returned when a nil pushLogsData is given.
+	errNilPushLogsData = errors.New("nil pushLogsData")
 )

@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,8 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opencensus.io/trace"
 
-	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
-	"github.com/open-telemetry/opentelemetry-collector/observability/observabilitytest"
+	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/obsreport/obsreporttest"
 )
 
 // Ensure that if we add a metrics exporter that our target metrics
@@ -40,10 +40,11 @@ import (
 // test is to ensure exactness, but with the mentioned views registered, the
 // output will be quite noisy.
 func TestEnsureRecordedMetrics(t *testing.T) {
-	doneFn := observabilitytest.SetupRecordedMetricsTest()
+	doneFn, err := obsreporttest.SetupRecordedMetricsTest()
+	require.NoError(t, err)
 	defer doneFn()
 
-	_, port, doneReceiverFn := ocReceiverOnGRPCServer(t, exportertest.NewNopTraceExporterOld())
+	port, doneReceiverFn := ocReceiverOnGRPCServer(t, consumertest.NewTracesNop())
 	defer doneReceiverFn()
 
 	n := 20
@@ -57,17 +58,15 @@ func TestEnsureRecordedMetrics(t *testing.T) {
 	}
 	flush(traceSvcDoneFn)
 
-	err = observabilitytest.CheckValueViewReceiverReceivedSpans("oc_trace", n)
-	require.NoError(t, err, "When check recorded values: want nil got %v", err)
-	err = observabilitytest.CheckValueViewReceiverDroppedSpans("oc_trace", 0)
-	require.NoError(t, err, "When check recorded values: want nil got %v", err)
+	obsreporttest.CheckReceiverTracesViews(t, "oc_trace", "grpc", int64(n), 0)
 }
 
 func TestEnsureRecordedMetrics_zeroLengthSpansSender(t *testing.T) {
-	doneFn := observabilitytest.SetupRecordedMetricsTest()
+	doneFn, err := obsreporttest.SetupRecordedMetricsTest()
+	require.NoError(t, err)
 	defer doneFn()
 
-	_, port, doneFn := ocReceiverOnGRPCServer(t, exportertest.NewNopTraceExporterOld())
+	port, doneFn := ocReceiverOnGRPCServer(t, consumertest.NewTracesNop())
 	defer doneFn()
 
 	n := 20
@@ -80,10 +79,7 @@ func TestEnsureRecordedMetrics_zeroLengthSpansSender(t *testing.T) {
 	}
 	flush(traceSvcDoneFn)
 
-	err = observabilitytest.CheckValueViewReceiverReceivedSpans("oc_trace", 0)
-	require.NoError(t, err, "When check recorded values: want nil got %v", err)
-	err = observabilitytest.CheckValueViewReceiverDroppedSpans("oc_trace", 0)
-	require.NoError(t, err, "When check recorded values: want nil got %v", err)
+	obsreporttest.CheckReceiverTracesViews(t, "oc_trace", "grpc", 0, 0)
 }
 
 func TestExportSpanLinkingMaintainsParentLink(t *testing.T) {
@@ -100,7 +96,7 @@ func TestExportSpanLinkingMaintainsParentLink(t *testing.T) {
 	trace.RegisterExporter(ocSpansSaver)
 	defer trace.UnregisterExporter(ocSpansSaver)
 
-	_, port, doneFn := ocReceiverOnGRPCServer(t, exportertest.NewNopTraceExporterOld())
+	port, doneFn := ocReceiverOnGRPCServer(t, consumertest.NewTracesNop())
 	defer doneFn()
 
 	traceSvcClient, traceSvcDoneFn, err := makeTraceServiceClient(port)
@@ -182,12 +178,12 @@ func (tote *testOCTraceExporter) ExportSpan(sd *trace.SpanData) {
 // TODO: Determine how to do this deterministic.
 func flush(traceSvcDoneFn func()) {
 	// Give it enough time to process the streamed spans.
-	<-time.After(20 * time.Millisecond)
+	<-time.After(40 * time.Millisecond)
 
 	// End the gRPC service to complete the RPC trace so that we
 	// can examine the RPC trace as well.
 	traceSvcDoneFn()
 
 	// Give it some more time to complete the RPC trace and export.
-	<-time.After(20 * time.Millisecond)
+	<-time.After(40 * time.Millisecond)
 }

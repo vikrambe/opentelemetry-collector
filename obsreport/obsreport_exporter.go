@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,8 +21,8 @@ import (
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
 
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/observability"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/configtelemetry"
 )
 
 const (
@@ -38,6 +38,11 @@ const (
 	SentMetricPointsKey = "sent_metric_points"
 	// Key used to track metric points that failed to be sent by exporters.
 	FailedToSendMetricPointsKey = "send_failed_metric_points"
+
+	// Key used to track logs sent by exporters.
+	SentLogRecordsKey = "sent_log_records"
+	// Key used to track logs that failed to be sent by exporters.
+	FailedToSendLogRecordsKey = "send_failed_log_records"
 )
 
 var (
@@ -46,6 +51,7 @@ var (
 	exporterPrefix                 = ExporterKey + nameSep
 	exportTraceDataOperationSuffix = nameSep + "TraceDataExported"
 	exportMetricsOperationSuffix   = nameSep + "MetricsExported"
+	exportLogsOperationSuffix      = nameSep + "LogRecordsExported"
 
 	// Exporter metrics. Any count of data items below is in the final format
 	// that they were sent, reasoning: reconciliation is easier if measurements
@@ -68,6 +74,14 @@ var (
 		exporterPrefix+FailedToSendMetricPointsKey,
 		"Number of metric points in failed attempts to send to destination.",
 		stats.UnitDimensionless)
+	mExporterSentLogRecords = stats.Int64(
+		exporterPrefix+SentLogRecordsKey,
+		"Number of log record successfully sent to destination.",
+		stats.UnitDimensionless)
+	mExporterFailedToSendLogRecords = stats.Int64(
+		exporterPrefix+FailedToSendLogRecordsKey,
+		"Number of log records in failed attempts to send to destination.",
+		stats.UnitDimensionless)
 )
 
 // StartTraceDataExportOp is called at the start of an Export operation.
@@ -88,14 +102,8 @@ func StartTraceDataExportOp(
 func EndTraceDataExportOp(
 	exporterCtx context.Context,
 	numExportedSpans int,
-	numDroppedSpans int, // TODO: For legacy measurements, to be removed in the future.
 	err error,
 ) {
-	if useLegacy {
-		observability.RecordMetricsForTraceExporter(
-			exporterCtx, numExportedSpans, numDroppedSpans)
-	}
-
 	endExportOp(
 		exporterCtx,
 		numExportedSpans,
@@ -122,20 +130,41 @@ func StartMetricsExportOp(
 func EndMetricsExportOp(
 	exporterCtx context.Context,
 	numExportedPoints int,
-	numExportedTimeSeries int, // TODO: For legacy measurements, to be removed in the future.
-	numDroppedTimeSeries int, // TODO: For legacy measurements, to be removed in the future.
 	err error,
 ) {
-	if useLegacy {
-		observability.RecordMetricsForMetricsExporter(
-			exporterCtx, numExportedTimeSeries, numDroppedTimeSeries)
-	}
-
 	endExportOp(
 		exporterCtx,
 		numExportedPoints,
 		err,
 		configmodels.MetricsDataType,
+	)
+}
+
+// StartLogsExportOp is called at the start of an Export operation.
+// The returned context should be used in other calls to the obsreport functions
+// dealing with the same export operation.
+func StartLogsExportOp(
+	operationCtx context.Context,
+	exporter string,
+) context.Context {
+	return traceExportDataOp(
+		operationCtx,
+		exporter,
+		exportLogsOperationSuffix)
+}
+
+// EndLogsExportOp completes the export operation that was started with
+// StartLogsExportOp.
+func EndLogsExportOp(
+	exporterCtx context.Context,
+	numExportedLogs int,
+	err error,
+) {
+	endExportOp(
+		exporterCtx,
+		numExportedLogs,
+		err,
+		configmodels.LogsDataType,
 	)
 }
 
@@ -147,15 +176,7 @@ func ExporterContext(
 	ctx context.Context,
 	exporter string,
 ) context.Context {
-	if useLegacy {
-		ctx = observability.ContextWithExporterName(ctx, exporter)
-	}
-
-	if useNew {
-		ctx, _ = tag.New(ctx, tag.Upsert(
-			tagKeyExporter, exporter, tag.WithTTL(tag.TTLNoPropagation)))
-	}
-
+	ctx, _ = tag.New(ctx, tag.Upsert(tagKeyExporter, exporter, tag.WithTTL(tag.TTLNoPropagation)))
 	return ctx
 }
 
@@ -185,7 +206,7 @@ func endExportOp(
 		numFailedToSend = numExportedItems
 	}
 
-	if useNew {
+	if gLevel != configtelemetry.LevelNone {
 		var sentMeasure, failedToSendMeasure *stats.Int64Measure
 		switch dataType {
 		case configmodels.TracesDataType:
@@ -194,6 +215,11 @@ func endExportOp(
 		case configmodels.MetricsDataType:
 			sentMeasure = mExporterSentMetricPoints
 			failedToSendMeasure = mExporterFailedToSendMetricPoints
+		case configmodels.LogsDataType:
+			sentMeasure = mExporterSentLogRecords
+			failedToSendMeasure = mExporterFailedToSendLogRecords
+		default:
+			panic("unknown data type for internal metrics")
 		}
 
 		stats.Record(
@@ -213,6 +239,9 @@ func endExportOp(
 		case configmodels.MetricsDataType:
 			sentItemsKey = SentMetricPointsKey
 			failedToSendItemsKey = FailedToSendMetricPointsKey
+		case configmodels.LogsDataType:
+			sentItemsKey = SentLogRecordsKey
+			failedToSendItemsKey = FailedToSendLogRecordsKey
 		}
 
 		span.AddAttributes(

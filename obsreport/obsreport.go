@@ -1,10 +1,10 @@
-// Copyright 2020 OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,8 +23,7 @@ import (
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/observability"
+	"go.opentelemetry.io/collector/config/configtelemetry"
 )
 
 const (
@@ -32,9 +31,7 @@ const (
 )
 
 var (
-	// Variables to control the usage of legacy and new metrics.
-	useLegacy = true
-	useNew    = true
+	gLevel = configtelemetry.LevelBasic
 
 	okStatus = trace.Status{Code: trace.StatusCodeOK}
 )
@@ -65,36 +62,15 @@ func setParentLink(parentCtx context.Context, childSpan *trace.Span) bool {
 
 // Configure is used to control the settings that will be used by the obsreport
 // package.
-func Configure(
-	generateLegacy, generateNew bool,
-) (views []*view.View) {
+func Configure(level configtelemetry.Level) (views []*view.View) {
+	gLevel = level
 
-	// TODO: expose some level control, similar to telemetry.Level
-
-	useLegacy = generateLegacy
-	useNew = generateNew
-
-	if useLegacy {
-		views = append(views, observability.AllViews...)
-	}
-
-	if useNew {
-		views = append(views, genAllViews()...)
+	if gLevel != configtelemetry.LevelNone {
+		gProcessorObsReport.level = level
+		views = append(views, AllViews()...)
 	}
 
 	return views
-}
-
-// CountMetricPoints is a helper to count the "amount" of metrics data.
-func CountMetricPoints(md consumerdata.MetricsData) (numTimeSeries int, numPoints int) {
-	for _, metric := range md.Metrics {
-		tss := metric.GetTimeseries()
-		numTimeSeries += len(tss)
-		for _, ts := range tss {
-			numPoints += len(ts.GetPoints())
-		}
-	}
-	return numTimeSeries, numPoints
 }
 
 func buildComponentPrefix(componentPrefix, configType string) string {
@@ -107,26 +83,41 @@ func buildComponentPrefix(componentPrefix, configType string) string {
 	return componentPrefix + configType + nameSep
 }
 
-func genAllViews() (views []*view.View) {
+// AllViews return the list of all views that needs to be configured.
+func AllViews() (views []*view.View) {
 	// Receiver views.
 	measures := []*stats.Int64Measure{
-		mReceiverAcceptedSpans, mReceiverRefusedSpans,
-		mReceiverAcceptedMetricPoints, mReceiverRefusedMetricPoints,
+		mReceiverAcceptedSpans,
+		mReceiverRefusedSpans,
+		mReceiverAcceptedMetricPoints,
+		mReceiverRefusedMetricPoints,
+		mReceiverAcceptedLogRecords,
+		mReceiverRefusedLogRecords,
 	}
 	tagKeys := []tag.Key{
 		tagKeyReceiver, tagKeyTransport,
 	}
-	views = append(views, genViews(
-		measures, tagKeys, view.Sum())...)
+	views = append(views, genViews(measures, tagKeys, view.Sum())...)
+
+	// Scraper views.
+	measures = []*stats.Int64Measure{
+		mScraperScrapedMetricPoints,
+		mScraperErroredMetricPoints,
+	}
+	tagKeys = []tag.Key{tagKeyReceiver, tagKeyScraper}
+	views = append(views, genViews(measures, tagKeys, view.Sum())...)
 
 	// Exporter views.
 	measures = []*stats.Int64Measure{
-		mExporterSentSpans, mExporterFailedToSendSpans,
-		mExporterSentMetricPoints, mExporterFailedToSendMetricPoints,
+		mExporterSentSpans,
+		mExporterFailedToSendSpans,
+		mExporterSentMetricPoints,
+		mExporterFailedToSendMetricPoints,
+		mExporterSentLogRecords,
+		mExporterFailedToSendLogRecords,
 	}
 	tagKeys = []tag.Key{tagKeyExporter}
-	views = append(views, genViews(
-		measures, tagKeys, view.Sum())...)
+	views = append(views, genViews(measures, tagKeys, view.Sum())...)
 
 	// Processor views.
 	measures = []*stats.Int64Measure{
@@ -136,10 +127,12 @@ func genAllViews() (views []*view.View) {
 		mProcessorAcceptedMetricPoints,
 		mProcessorRefusedMetricPoints,
 		mProcessorDroppedMetricPoints,
+		mProcessorAcceptedLogRecords,
+		mProcessorRefusedLogRecords,
+		mProcessorDroppedLogRecords,
 	}
 	tagKeys = []tag.Key{tagKeyProcessor}
-	views = append(views, genViews(
-		measures, tagKeys, view.Sum())...)
+	views = append(views, genViews(measures, tagKeys, view.Sum())...)
 
 	return views
 }

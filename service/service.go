@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,29 +18,57 @@ package service
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"runtime"
+	"sort"
 	"syscall"
 
-	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
-	"github.com/open-telemetry/opentelemetry-collector/config"
-	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/service/builder"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenterror"
+	"go.opentelemetry.io/collector/config"
+	"go.opentelemetry.io/collector/config/configcheck"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/internal/collector/telemetry"
+	"go.opentelemetry.io/collector/internal/version"
+	"go.opentelemetry.io/collector/service/builder"
+	"go.opentelemetry.io/collector/service/internal"
 )
+
+const (
+	servicezPath   = "servicez"
+	pipelinezPath  = "pipelinez"
+	extensionzPath = "extensionz"
+)
+
+// State defines Application's state.
+type State int
+
+const (
+	Starting State = iota
+	Running
+	Closing
+	Closed
+)
+
+// GetStateChannel returns state channel of the application.
+func (app *Application) GetStateChannel() chan State {
+	return app.stateChannel
+}
 
 // Application represents a collector application
 type Application struct {
-	info            ApplicationStartInfo
+	info            component.ApplicationStartInfo
 	rootCmd         *cobra.Command
 	v               *viper.Viper
 	logger          *zap.Logger
@@ -48,14 +76,16 @@ type Application struct {
 	builtReceivers  builder.Receivers
 	builtPipelines  builder.BuiltPipelines
 	builtExtensions builder.Extensions
+	stateChannel    chan State
 
-	factories config.Factories
+	factories component.Factories
 	config    *configmodels.Config
 
 	// stopTestChan is used to terminate the application in end to end tests.
 	stopTestChan chan struct{}
-	// readyChan is used in tests to indicate that the application is ready.
-	readyChan chan struct{}
+
+	// signalsChannel is used to receive termination signals from the OS.
+	signalsChannel chan os.Signal
 
 	// asyncErrorChannel is used to signal a fatal error from any component.
 	asyncErrorChannel chan error
@@ -66,38 +96,25 @@ func (app *Application) Command() *cobra.Command {
 	return app.rootCmd
 }
 
-// ApplicationStartInfo is the information that is logged at the application start.
-// This information can be overridden in custom builds.
-type ApplicationStartInfo struct {
-	// Executable file name, e.g. "otelcol".
-	ExeName string
-
-	// Long name, used e.g. in the logs.
-	LongName string
-
-	// Version string.
-	Version string
-
-	// Git hash of the source code.
-	GitHash string
-}
-
 // Parameters holds configuration for creating a new Application.
 type Parameters struct {
 	// Factories component factories.
-	Factories config.Factories
+	Factories component.Factories
 	// ApplicationStartInfo provides application start information.
-	ApplicationStartInfo ApplicationStartInfo
+	ApplicationStartInfo component.ApplicationStartInfo
 	// ConfigFactory that creates the configuration.
-	// If it is not provided the default factory will be used.
+	// If it is not provided the default factory (FileLoaderConfigFactory) is used.
 	// The default factory loads the configuration specified as a command line flag.
 	ConfigFactory ConfigFactory
+	// LoggingHooks provides a way to supply a hook into logging events
+	LoggingHooks []func(zapcore.Entry) error
 }
 
 // ConfigFactory creates config.
-type ConfigFactory func(v *viper.Viper, factories config.Factories) (*configmodels.Config, error)
+type ConfigFactory func(v *viper.Viper, factories component.Factories) (*configmodels.Config, error)
 
-func fileLoaderConfigFactory(v *viper.Viper, factories config.Factories) (*configmodels.Config, error) {
+// FileLoaderConfigFactory implements ConfigFactory and it creates configuration from file.
+func FileLoaderConfigFactory(v *viper.Viper, factories component.Factories) (*configmodels.Config, error) {
 	file := builder.GetConfigFile()
 	if file == "" {
 		return nil, errors.New("config file not specified")
@@ -113,23 +130,23 @@ func fileLoaderConfigFactory(v *viper.Viper, factories config.Factories) (*confi
 // New creates and returns a new instance of Application.
 func New(params Parameters) (*Application, error) {
 	app := &Application{
-		info:      params.ApplicationStartInfo,
-		v:         config.NewViper(),
-		readyChan: make(chan struct{}),
-		factories: params.Factories,
+		info:         params.ApplicationStartInfo,
+		v:            config.NewViper(),
+		factories:    params.Factories,
+		stateChannel: make(chan State, Closed+1),
 	}
 
 	factory := params.ConfigFactory
 	if factory == nil {
 		// use default factory that loads the configuration file
-		factory = fileLoaderConfigFactory
+		factory = FileLoaderConfigFactory
 	}
 
 	rootCmd := &cobra.Command{
 		Use:  params.ApplicationStartInfo.ExeName,
 		Long: params.ApplicationStartInfo.LongName,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := app.init()
+			err := app.init(params.LoggingHooks...)
 			if err != nil {
 				return err
 			}
@@ -146,7 +163,7 @@ func New(params Parameters) (*Application, error) {
 	// TODO: coalesce this code and expose this information to other components.
 	flagSet := new(flag.FlagSet)
 	addFlagsFns := []func(*flag.FlagSet){
-		telemetryFlags,
+		telemetry.Flags,
 		builder.Flags,
 		loggerFlags,
 	}
@@ -167,7 +184,13 @@ func (app *Application) ReportFatalError(err error) {
 	app.asyncErrorChannel <- err
 }
 
-func (app *Application) GetFactory(kind component.Kind, componentType string) component.Factory {
+// GetLogger returns logger used by the Application.
+// The logger is initialized after application start.
+func (app *Application) GetLogger() *zap.Logger {
+	return app.logger
+}
+
+func (app *Application) GetFactory(kind component.Kind, componentType configmodels.Type) component.Factory {
 	switch kind {
 	case component.KindReceiver:
 		return app.factories.Receivers[componentType]
@@ -182,13 +205,32 @@ func (app *Application) GetFactory(kind component.Kind, componentType string) co
 }
 
 func (app *Application) GetExtensions() map[configmodels.Extension]component.ServiceExtension {
-	return app.builtExtensions.GetServiceExtensions()
+	return app.builtExtensions.ToMap()
 }
 
-func (app *Application) init() error {
-	l, err := newLogger()
+func (app *Application) GetExporters() map[configmodels.DataType]map[configmodels.Exporter]component.Exporter {
+	return app.builtExporters.ToMapByDataType()
+}
+
+func (app *Application) RegisterZPages(mux *http.ServeMux, pathPrefix string) {
+	mux.HandleFunc(path.Join(pathPrefix, servicezPath), app.handleServicezRequest)
+	mux.HandleFunc(path.Join(pathPrefix, pipelinezPath), app.handlePipelinezRequest)
+	mux.HandleFunc(path.Join(pathPrefix, extensionzPath), app.handleExtensionzRequest)
+}
+
+func (app *Application) SignalTestComplete() {
+	defer func() {
+		if r := recover(); r != nil {
+			app.logger.Info("stopTestChan already closed")
+		}
+	}()
+	close(app.stopTestChan)
+}
+
+func (app *Application) init(hooks ...func(zapcore.Entry) error) error {
+	l, err := newLogger(hooks...)
 	if err != nil {
-		return errors.Wrap(err, "failed to get logger")
+		return fmt.Errorf("failed to get logger: %w", err)
 	}
 	app.logger = l
 	return nil
@@ -197,9 +239,9 @@ func (app *Application) init() error {
 func (app *Application) setupTelemetry(ballastSizeBytes uint64) error {
 	app.logger.Info("Setting up own telemetry...")
 
-	err := AppTelemetry.init(app.asyncErrorChannel, ballastSizeBytes, app.logger)
+	err := applicationTelemetry.init(app.asyncErrorChannel, ballastSizeBytes, app.logger)
 	if err != nil {
-		return errors.Wrap(err, "failed to initialize telemetry")
+		return fmt.Errorf("failed to initialize telemetry: %w", err)
 	}
 
 	return nil
@@ -209,23 +251,22 @@ func (app *Application) setupTelemetry(ballastSizeBytes uint64) error {
 func (app *Application) runAndWaitForShutdownEvent() {
 	app.logger.Info("Everything is ready. Begin running and processing data.")
 
-	// Plug SIGTERM signal into a channel.
-	signalsChannel := make(chan os.Signal, 1)
-	signal.Notify(signalsChannel, os.Interrupt, syscall.SIGTERM)
+	// plug SIGTERM signal into a channel.
+	app.signalsChannel = make(chan os.Signal, 1)
+	signal.Notify(app.signalsChannel, os.Interrupt, syscall.SIGTERM)
 
 	// set the channel to stop testing.
 	app.stopTestChan = make(chan struct{})
-	// notify tests that it is ready.
-	close(app.readyChan)
-
+	app.stateChannel <- Running
 	select {
 	case err := <-app.asyncErrorChannel:
 		app.logger.Error("Asynchronous error received, terminating process", zap.Error(err))
-	case s := <-signalsChannel:
+	case s := <-app.signalsChannel:
 		app.logger.Info("Received signal from OS", zap.String("signal", s.String()))
 	case <-app.stopTestChan:
 		app.logger.Info("Received stop test request")
 	}
+	app.stateChannel <- Closing
 }
 
 func (app *Application) setupConfigurationComponents(ctx context.Context, factory ConfigFactory) error {
@@ -236,11 +277,11 @@ func (app *Application) setupConfigurationComponents(ctx context.Context, factor
 	app.logger.Info("Loading configuration...")
 	cfg, err := factory(app.v, app.factories)
 	if err != nil {
-		return errors.Wrap(err, "cannot load configuration")
+		return fmt.Errorf("cannot load configuration: %w", err)
 	}
 	err = config.ValidateConfig(cfg, app.logger)
 	if err != nil {
-		return errors.Wrap(err, "cannot load configuration")
+		return fmt.Errorf("cannot load configuration: %w", err)
 	}
 
 	app.config = cfg
@@ -248,12 +289,12 @@ func (app *Application) setupConfigurationComponents(ctx context.Context, factor
 
 	err = app.setupExtensions(ctx)
 	if err != nil {
-		return errors.Wrap(err, "cannot setup extensions")
+		return fmt.Errorf("cannot setup extensions: %w", err)
 	}
 
 	err = app.setupPipelines(ctx)
 	if err != nil {
-		return errors.Wrap(err, "cannot setup pipelines")
+		return fmt.Errorf("cannot setup pipelines: %w", err)
 	}
 
 	return nil
@@ -261,9 +302,9 @@ func (app *Application) setupConfigurationComponents(ctx context.Context, factor
 
 func (app *Application) setupExtensions(ctx context.Context) error {
 	var err error
-	app.builtExtensions, err = builder.NewExtensionsBuilder(app.logger, app.config, app.factories.Extensions).Build()
+	app.builtExtensions, err = builder.NewExtensionsBuilder(app.logger, app.info, app.config, app.factories.Extensions).Build()
 	if err != nil {
-		return errors.Wrap(err, "cannot build builtExtensions")
+		return fmt.Errorf("cannot build builtExtensions: %w", err)
 	}
 	app.logger.Info("Starting extensions...")
 	return app.builtExtensions.StartAll(ctx, app)
@@ -275,40 +316,40 @@ func (app *Application) setupPipelines(ctx context.Context) error {
 
 	// First create exporters.
 	var err error
-	app.builtExporters, err = builder.NewExportersBuilder(app.logger, app.config, app.factories.Exporters).Build()
+	app.builtExporters, err = builder.NewExportersBuilder(app.logger, app.info, app.config, app.factories.Exporters).Build()
 	if err != nil {
-		return errors.Wrap(err, "cannot build builtExporters")
+		return fmt.Errorf("cannot build builtExporters: %w", err)
 	}
-	app.logger.Info("Starting exporters...")
 
+	app.logger.Info("Starting exporters...")
 	err = app.builtExporters.StartAll(ctx, app)
 	if err != nil {
-		return errors.Wrap(err, "cannot start builtExporters")
+		return fmt.Errorf("cannot start builtExporters: %w", err)
 	}
 
 	// Create pipelines and their processors and plug exporters to the
 	// end of the pipelines.
-	app.builtPipelines, err = builder.NewPipelinesBuilder(app.logger, app.config, app.builtExporters, app.factories.Processors).Build()
+	app.builtPipelines, err = builder.NewPipelinesBuilder(app.logger, app.info, app.config, app.builtExporters, app.factories.Processors).Build()
 	if err != nil {
-		return errors.Wrap(err, "cannot build pipelines")
+		return fmt.Errorf("cannot build pipelines: %w", err)
 	}
 
 	app.logger.Info("Starting processors...")
 	err = app.builtPipelines.StartProcessors(ctx, app)
 	if err != nil {
-		return errors.Wrap(err, "cannot start processors")
+		return fmt.Errorf("cannot start processors: %w", err)
 	}
 
 	// Create receivers and plug them into the start of the pipelines.
-	app.builtReceivers, err = builder.NewReceiversBuilder(app.logger, app.config, app.builtPipelines, app.factories.Receivers).Build()
+	app.builtReceivers, err = builder.NewReceiversBuilder(app.logger, app.info, app.config, app.builtPipelines, app.factories.Receivers).Build()
 	if err != nil {
-		return errors.Wrap(err, "cannot build receivers")
+		return fmt.Errorf("cannot build receivers: %w", err)
 	}
 
 	app.logger.Info("Starting receivers...")
 	err = app.builtReceivers.StartAll(ctx, app)
 	if err != nil {
-		return errors.Wrap(err, "cannot start receivers")
+		return fmt.Errorf("cannot start receivers: %w", err)
 	}
 
 	return nil
@@ -324,33 +365,29 @@ func (app *Application) shutdownPipelines(ctx context.Context) error {
 	app.logger.Info("Stopping receivers...")
 	err := app.builtReceivers.ShutdownAll(ctx)
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to stop receivers"))
+		errs = append(errs, fmt.Errorf("failed to stop receivers: %w", err))
 	}
 
 	app.logger.Info("Stopping processors...")
 	err = app.builtPipelines.ShutdownProcessors(ctx)
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to shutdown processors"))
+		errs = append(errs, fmt.Errorf("failed to shutdown processors: %w", err))
 	}
 
 	app.logger.Info("Stopping exporters...")
 	err = app.builtExporters.ShutdownAll(ctx)
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to shutdown exporters"))
+		errs = append(errs, fmt.Errorf("failed to shutdown exporters: %w", err))
 	}
 
-	if len(errs) != 0 {
-		return componenterror.CombineErrors(errs)
-	}
-
-	return nil
+	return componenterror.CombineErrors(errs)
 }
 
 func (app *Application) shutdownExtensions(ctx context.Context) error {
 	app.logger.Info("Stopping extensions...")
 	err := app.builtExtensions.ShutdownAll(ctx)
 	if err != nil {
-		return errors.Wrap(err, "failed to shutdown extensions")
+		return fmt.Errorf("failed to shutdown extensions: %w", err)
 	}
 	return nil
 }
@@ -361,6 +398,7 @@ func (app *Application) execute(ctx context.Context, factory ConfigFactory) erro
 		zap.String("GitHash", app.info.GitHash),
 		zap.Int("NumCPU", runtime.NumCPU()),
 	)
+	app.stateChannel <- Starting
 
 	// Set memory ballast
 	ballast, ballastSizeBytes := app.createMemoryBallast()
@@ -395,36 +433,140 @@ func (app *Application) execute(ctx context.Context, factory ConfigFactory) erro
 
 	err = app.builtExtensions.NotifyPipelineNotReady()
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to notify that pipeline is not ready"))
+		errs = append(errs, fmt.Errorf("failed to notify that pipeline is not ready: %w", err))
 	}
 
 	err = app.shutdownPipelines(ctx)
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to shutdown pipelines"))
+		errs = append(errs, fmt.Errorf("failed to shutdown pipelines: %w", err))
 	}
 
 	err = app.shutdownExtensions(ctx)
 	if err != nil {
-		errs = append(errs, errors.Wrap(err, "failed to shutdown extensions"))
+		errs = append(errs, fmt.Errorf("failed to shutdown extensions: %w", err))
 	}
 
-	AppTelemetry.shutdown()
+	err = applicationTelemetry.shutdown()
+	if err != nil {
+		errs = append(errs, fmt.Errorf("failed to shutdown extensions: %w", err))
+	}
 
 	app.logger.Info("Shutdown complete.")
+	app.stateChannel <- Closed
+	close(app.stateChannel)
 
-	if len(errs) != 0 {
-		return componenterror.CombineErrors(errs)
-	}
-	return nil
+	return componenterror.CombineErrors(errs)
 }
 
-// Start starts the collector according to the command and configuration
-// given by the user.
-func (app *Application) Start() error {
+// Run starts the collector according to the command and configuration
+// given by the user, and waits for it to complete.
+func (app *Application) Run() error {
 	// From this point on do not show usage in case of error.
 	app.rootCmd.SilenceUsage = true
 
 	return app.rootCmd.Execute()
+}
+
+const (
+	zPipelineName  = "zpipelinename"
+	zComponentName = "zcomponentname"
+	zComponentKind = "zcomponentkind"
+	zExtensionName = "zextensionname"
+)
+
+func (app *Application) handleServicezRequest(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	internal.WriteHTMLHeader(w, internal.HeaderData{Title: "Service"})
+	internal.WriteHTMLComponentHeader(w, internal.ComponentHeaderData{
+		Name:              "Pipelines",
+		ComponentEndpoint: pipelinezPath,
+		Link:              true,
+	})
+	internal.WriteHTMLComponentHeader(w, internal.ComponentHeaderData{
+		Name:              "Extensions",
+		ComponentEndpoint: extensionzPath,
+		Link:              true,
+	})
+	internal.WriteHTMLPropertiesTable(w, internal.PropertiesTableData{Name: "Build And Runtime", Properties: version.InfoVar})
+	internal.WriteHTMLFooter(w)
+}
+
+func (app *Application) handlePipelinezRequest(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	pipelineName := r.Form.Get(zPipelineName)
+	componentName := r.Form.Get(zComponentName)
+	componentKind := r.Form.Get(zComponentKind)
+	internal.WriteHTMLHeader(w, internal.HeaderData{Title: "Pipelines"})
+	internal.WriteHTMLPipelinesSummaryTable(w, app.getPipelinesSummaryTableData())
+	if pipelineName != "" && componentName != "" && componentKind != "" {
+		fullName := componentName
+		if componentKind == "processor" {
+			fullName = pipelineName + "/" + componentName
+		}
+		internal.WriteHTMLComponentHeader(w, internal.ComponentHeaderData{
+			Name: componentKind + ": " + fullName,
+		})
+		// TODO: Add config + status info.
+	}
+	internal.WriteHTMLFooter(w)
+}
+
+func (app *Application) handleExtensionzRequest(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	extensionName := r.Form.Get(zExtensionName)
+	internal.WriteHTMLHeader(w, internal.HeaderData{Title: "Extensions"})
+	internal.WriteHTMLExtensionsSummaryTable(w, app.getExtensionsSummaryTableData())
+	if extensionName != "" {
+		internal.WriteHTMLComponentHeader(w, internal.ComponentHeaderData{
+			Name: extensionName,
+		})
+		// TODO: Add config + status info.
+	}
+	internal.WriteHTMLFooter(w)
+}
+
+func (app *Application) getPipelinesSummaryTableData() internal.SummaryPipelinesTableData {
+	data := internal.SummaryPipelinesTableData{
+		ComponentEndpoint: pipelinezPath,
+	}
+
+	data.Rows = make([]internal.SummaryPipelinesTableRowData, 0, len(app.builtExtensions))
+	for c, p := range app.builtPipelines {
+		row := internal.SummaryPipelinesTableRowData{
+			FullName:            c.Name,
+			InputType:           string(c.InputType),
+			MutatesConsumedData: p.MutatesConsumedData,
+			Receivers:           c.Receivers,
+			Processors:          c.Processors,
+			Exporters:           c.Exporters,
+		}
+		data.Rows = append(data.Rows, row)
+	}
+
+	sort.Slice(data.Rows, func(i, j int) bool {
+		return data.Rows[i].FullName < data.Rows[j].FullName
+	})
+	return data
+}
+
+func (app *Application) getExtensionsSummaryTableData() internal.SummaryExtensionsTableData {
+	data := internal.SummaryExtensionsTableData{
+		ComponentEndpoint: extensionzPath,
+	}
+
+	data.Rows = make([]internal.SummaryExtensionsTableRowData, 0, len(app.builtExtensions))
+	for c := range app.builtExtensions {
+		row := internal.SummaryExtensionsTableRowData{FullName: c.Name()}
+		data.Rows = append(data.Rows, row)
+	}
+
+	sort.Slice(data.Rows, func(i, j int) bool {
+		return data.Rows[i].FullName < data.Rows[j].FullName
+	})
+	return data
 }
 
 func (app *Application) createMemoryBallast() ([]byte, uint64) {

@@ -1,10 +1,10 @@
-// Copyright 2020, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +16,13 @@ package builder
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenterror"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 // builtExporter is an exporter that is built based on a config. It can have
@@ -71,10 +71,7 @@ func (exts Extensions) ShutdownAll(ctx context.Context) error {
 		}
 	}
 
-	if len(errs) != 0 {
-		return componenterror.CombineErrors(errs)
-	}
-	return nil
+	return componenterror.CombineErrors(errs)
 }
 
 func (exts Extensions) NotifyPipelineReady() error {
@@ -102,14 +99,10 @@ func (exts Extensions) NotifyPipelineNotReady() error {
 		}
 	}
 
-	if len(errs) != 0 {
-		return componenterror.CombineErrors(errs)
-	}
-
-	return nil
+	return componenterror.CombineErrors(errs)
 }
 
-func (exts Extensions) GetServiceExtensions() map[configmodels.Extension]component.ServiceExtension {
+func (exts Extensions) ToMap() map[configmodels.Extension]component.ServiceExtension {
 	result := make(map[configmodels.Extension]component.ServiceExtension, len(exts))
 	for k, v := range exts {
 		result[k] = v.extension
@@ -120,17 +113,19 @@ func (exts Extensions) GetServiceExtensions() map[configmodels.Extension]compone
 // ExportersBuilder builds exporters from config.
 type ExtensionsBuilder struct {
 	logger    *zap.Logger
+	appInfo   component.ApplicationStartInfo
 	config    *configmodels.Config
-	factories map[string]component.ExtensionFactory
+	factories map[configmodels.Type]component.ExtensionFactory
 }
 
 // NewExportersBuilder creates a new ExportersBuilder. Call BuildExporters() on the returned value.
 func NewExtensionsBuilder(
 	logger *zap.Logger,
+	appInfo component.ApplicationStartInfo,
 	config *configmodels.Config,
-	factories map[string]component.ExtensionFactory,
+	factories map[configmodels.Type]component.ExtensionFactory,
 ) *ExtensionsBuilder {
-	return &ExtensionsBuilder{logger.With(zap.String(kindLogKey, kindLogExtension)), config, factories}
+	return &ExtensionsBuilder{logger.With(zap.String(kindLogKey, kindLogExtension)), appInfo, config, factories}
 }
 
 // Build extensions from config.
@@ -140,11 +135,11 @@ func (eb *ExtensionsBuilder) Build() (Extensions, error) {
 	for _, extName := range eb.config.Service.Extensions {
 		extCfg, exists := eb.config.Extensions[extName]
 		if !exists {
-			return nil, errors.Errorf("extension %q is not configured", extName)
+			return nil, fmt.Errorf("extension %q is not configured", extName)
 		}
 
-		componentLogger := eb.logger.With(zap.String(typeLogKey, extCfg.Type()), zap.String(nameLogKey, extCfg.Name()))
-		ext, err := eb.buildExtension(componentLogger, extCfg)
+		componentLogger := eb.logger.With(zap.String(typeLogKey, string(extCfg.Type())), zap.String(nameLogKey, extCfg.Name()))
+		ext, err := eb.buildExtension(componentLogger, eb.appInfo, extCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -155,24 +150,29 @@ func (eb *ExtensionsBuilder) Build() (Extensions, error) {
 	return extensions, nil
 }
 
-func (eb *ExtensionsBuilder) buildExtension(logger *zap.Logger, cfg configmodels.Extension) (*builtExtension, error) {
+func (eb *ExtensionsBuilder) buildExtension(logger *zap.Logger, appInfo component.ApplicationStartInfo, cfg configmodels.Extension) (*builtExtension, error) {
 	factory := eb.factories[cfg.Type()]
 	if factory == nil {
-		return nil, errors.Errorf("extension factory for type %q is not configured", cfg.Type())
+		return nil, fmt.Errorf("extension factory for type %q is not configured", cfg.Type())
 	}
 
 	ext := &builtExtension{
 		logger: logger,
 	}
 
-	ex, err := factory.CreateExtension(context.Background(), component.ExtensionCreateParams{Logger: eb.logger}, cfg)
+	creationParams := component.ExtensionCreateParams{
+		Logger:               logger,
+		ApplicationStartInfo: appInfo,
+	}
+
+	ex, err := factory.CreateExtension(context.Background(), creationParams, cfg)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to create extension %q", cfg.Name())
+		return nil, fmt.Errorf("failed to create extension %q: %w", cfg.Name(), err)
 	}
 
 	// Check if the factory really created the extension.
 	if ex == nil {
-		return nil, errors.Errorf("factory for %q produced a nil extension", cfg.Name())
+		return nil, fmt.Errorf("factory for %q produced a nil extension", cfg.Name())
 	}
 
 	ext.extension = ex

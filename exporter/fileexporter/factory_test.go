@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,33 +15,50 @@
 package fileexporter
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/config/configcheck"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configcheck"
 )
 
 func TestCreateDefaultConfig(t *testing.T) {
-	factory := Factory{}
-	cfg := factory.CreateDefaultConfig()
+	cfg := createDefaultConfig()
 	assert.NotNil(t, cfg, "failed to create default config")
 	assert.NoError(t, configcheck.ValidateConfig(cfg))
 }
 
 func TestCreateMetricsExporter(t *testing.T) {
-	factory := &Factory{}
-	cfg := factory.CreateDefaultConfig()
-
-	_, err := factory.CreateMetricsExporter(zap.NewNop(), cfg)
+	cfg := createDefaultConfig()
+	exp, err := createMetricsExporter(
+		context.Background(),
+		component.ExporterCreateParams{Logger: zap.NewNop()},
+		cfg)
 	assert.Error(t, err)
+	require.Nil(t, exp)
 }
 
 func TestCreateTraceExporter(t *testing.T) {
-	factory := &Factory{}
-	cfg := factory.CreateDefaultConfig()
-
-	_, err := factory.CreateTraceExporter(zap.NewNop(), cfg)
+	cfg := createDefaultConfig()
+	exp, err := createTraceExporter(
+		context.Background(),
+		component.ExporterCreateParams{Logger: zap.NewNop()},
+		cfg)
 	assert.Error(t, err)
+	require.Nil(t, exp)
+}
+
+func TestCreateLogsExporter(t *testing.T) {
+	cfg := createDefaultConfig()
+
+	exp, err := createLogsExporter(
+		context.Background(),
+		component.ExporterCreateParams{Logger: zap.NewNop()},
+		cfg)
+	assert.Error(t, err)
+	require.Nil(t, exp)
 }

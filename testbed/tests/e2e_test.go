@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package tests contains test cases. To run the tests go to tests directory and run:
-// TESTBED_CONFIG=local.yaml go test -v
+// RUN_TESTBED=1 go test -v
 
 package tests
 
@@ -25,14 +25,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/open-telemetry/opentelemetry-collector/testbed/testbed"
+	"go.opentelemetry.io/collector/testbed/testbed"
 )
 
 func TestIdleMode(t *testing.T) {
+	options := testbed.LoadOptions{DataItemsPerSecond: 10_000, ItemsPerBatch: 10}
+	dataProvider := testbed.NewPerfTestDataProvider(options)
 	tc := testbed.NewTestCase(
 		t,
-		testbed.NewJaegerGRPCDataSender(testbed.DefaultJaegerPort),
+		dataProvider,
+		testbed.NewJaegerGRPCDataSender(testbed.DefaultHost, testbed.DefaultJaegerPort),
 		testbed.NewOCDataReceiver(testbed.DefaultOCPort),
+		&testbed.ChildProcess{},
+		&testbed.PerfTestValidator{},
+		performanceResultsSummary,
 	)
 	defer tc.Stop()
 
@@ -52,11 +58,17 @@ func TestBallastMemory(t *testing.T) {
 		{1000, 100},
 	}
 
+	options := testbed.LoadOptions{DataItemsPerSecond: 10_000, ItemsPerBatch: 10}
+	dataProvider := testbed.NewPerfTestDataProvider(options)
 	for _, test := range tests {
 		tc := testbed.NewTestCase(
 			t,
-			testbed.NewJaegerGRPCDataSender(testbed.DefaultJaegerPort),
+			dataProvider,
+			testbed.NewJaegerGRPCDataSender(testbed.DefaultHost, testbed.DefaultJaegerPort),
 			testbed.NewOCDataReceiver(testbed.DefaultOCPort),
+			&testbed.ChildProcess{},
+			&testbed.PerfTestValidator{},
+			performanceResultsSummary,
 			testbed.WithSkipResults(),
 		)
 		tc.SetResourceLimits(testbed.ResourceSpec{ExpectedMaxRAM: test.maxRSS})

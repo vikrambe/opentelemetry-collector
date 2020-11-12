@@ -1,9 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-////     http://www.apache.org/licenses/LICENSE-2.0
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,30 +24,52 @@ import (
 
 func TestGeneratorAndBackend(t *testing.T) {
 	port := GetAvailablePort(t)
-	mb := NewMockBackend("mockbackend.log", NewJaegerDataReceiver(port))
 
-	assert.EqualValues(t, 0, mb.DataItemsReceived())
+	tests := []struct {
+		name     string
+		receiver DataReceiver
+		sender   DataSender
+	}{
+		{
+			name:     "Jaeger-JaegerGRPC",
+			receiver: NewJaegerDataReceiver(port),
+			sender:   NewJaegerGRPCDataSender(DefaultHost, port),
+		},
+		{
+			name:     "Zipkin-Zipkin",
+			receiver: NewZipkinDataReceiver(port),
+			sender:   NewZipkinDataSender(DefaultHost, port),
+		},
+	}
 
-	err := mb.Start()
-	require.NoError(t, err, "Cannot start backend")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mb := NewMockBackend("mockbackend.log", test.receiver)
 
-	defer mb.Stop()
+			assert.EqualValues(t, 0, mb.DataItemsReceived())
+			require.NoError(t, mb.Start(), "Cannot start backend")
 
-	lg, err := NewLoadGenerator(NewJaegerGRPCDataSender(port))
-	require.NoError(t, err, "Cannot start load generator")
+			defer mb.Stop()
 
-	assert.EqualValues(t, 0, lg.dataItemsSent)
+			options := LoadOptions{DataItemsPerSecond: 10_000, ItemsPerBatch: 10}
+			dataProvider := NewPerfTestDataProvider(options)
+			lg, err := NewLoadGenerator(dataProvider, test.sender)
+			require.NoError(t, err, "Cannot start load generator")
 
-	// Generate at 1000 SPS
-	lg.Start(LoadOptions{DataItemsPerSecond: 1000})
+			assert.EqualValues(t, 0, lg.dataItemsSent.Load())
 
-	// Wait until at least 50 spans are sent
-	WaitFor(t, func() bool { return lg.DataItemsSent() > 50 }, "DataItemsSent > 50")
+			// Generate at 1000 SPS
+			lg.Start(LoadOptions{DataItemsPerSecond: 1000})
 
-	lg.Stop()
+			// Wait until at least 50 spans are sent
+			WaitFor(t, func() bool { return lg.DataItemsSent() > 50 }, "DataItemsSent > 50")
 
-	// The backend should receive everything generated.
-	assert.Equal(t, lg.DataItemsSent(), mb.DataItemsReceived())
+			lg.Stop()
+
+			// The backend should receive everything generated.
+			assert.Equal(t, lg.DataItemsSent(), mb.DataItemsReceived())
+		})
+	}
 }
 
 // WaitFor the specific condition for up to 10 seconds. Records a test error
@@ -62,7 +85,7 @@ func WaitFor(t *testing.T, cond func() bool, errMsg ...interface{}) bool {
 
 		// Increase waiting interval exponentially up to 500 ms.
 		if waitInterval < time.Millisecond*500 {
-			waitInterval = waitInterval * 2
+			waitInterval *= 2
 		}
 
 		if cond() {

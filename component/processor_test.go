@@ -1,10 +1,10 @@
-// Copyright  OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,14 +15,14 @@
 package component
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
+	"go.opentelemetry.io/collector/config/configerror"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/consumer"
 )
 
 type TestProcessorFactory struct {
@@ -30,8 +30,8 @@ type TestProcessorFactory struct {
 }
 
 // Type gets the type of the Processor config created by this factory.
-func (f *TestProcessorFactory) Type() string {
-	return f.name
+func (f *TestProcessorFactory) Type() configmodels.Type {
+	return configmodels.Type(f.name)
 }
 
 // CreateDefaultConfig creates the default configuration for the Processor.
@@ -40,58 +40,52 @@ func (f *TestProcessorFactory) CreateDefaultConfig() configmodels.Processor {
 }
 
 // CreateTraceProcessor creates a trace processor based on this config.
-func (f *TestProcessorFactory) CreateTraceProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.TraceConsumerOld,
-	cfg configmodels.Processor,
-) (TraceProcessorOld, error) {
+func (f *TestProcessorFactory) CreateTracesProcessor(context.Context, ProcessorCreateParams, configmodels.Processor, consumer.TracesConsumer) (TracesProcessor, error) {
 	return nil, configerror.ErrDataTypeIsNotSupported
 }
 
 // CreateMetricsProcessor creates a metrics processor based on this config.
-func (f *TestProcessorFactory) CreateMetricsProcessor(
-	logger *zap.Logger,
-	nextConsumer consumer.MetricsConsumerOld,
-	cfg configmodels.Processor,
-) (MetricsProcessorOld, error) {
+func (f *TestProcessorFactory) CreateMetricsProcessor(context.Context, ProcessorCreateParams, configmodels.Processor, consumer.MetricsConsumer) (MetricsProcessor, error) {
+	return nil, configerror.ErrDataTypeIsNotSupported
+}
+
+// CreateMetricsProcessor creates a metrics processor based on this config.
+func (f *TestProcessorFactory) CreateLogsProcessor(context.Context, ProcessorCreateParams, configmodels.Processor, consumer.LogsConsumer) (LogsProcessor, error) {
 	return nil, configerror.ErrDataTypeIsNotSupported
 }
 
 func TestFactoriesBuilder(t *testing.T) {
 	type testCase struct {
-		in  []ProcessorFactoryBase
-		out map[string]ProcessorFactoryBase
-		err bool
+		in  []ProcessorFactory
+		out map[configmodels.Type]ProcessorFactory
 	}
 
 	testCases := []testCase{
 		{
-			in: []ProcessorFactoryBase{
+			in: []ProcessorFactory{
 				&TestProcessorFactory{"p1"},
 				&TestProcessorFactory{"p2"},
 			},
-			out: map[string]ProcessorFactoryBase{
+			out: map[configmodels.Type]ProcessorFactory{
 				"p1": &TestProcessorFactory{"p1"},
 				"p2": &TestProcessorFactory{"p2"},
 			},
-			err: false,
 		},
 		{
-			in: []ProcessorFactoryBase{
+			in: []ProcessorFactory{
 				&TestProcessorFactory{"p1"},
 				&TestProcessorFactory{"p1"},
 			},
-			err: true,
 		},
 	}
 
 	for _, c := range testCases {
 		out, err := MakeProcessorFactoryMap(c.in...)
-		if c.err {
-			assert.NotNil(t, err)
+		if c.out == nil {
+			assert.Error(t, err)
 			continue
 		}
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, c.out, out)
 	}
 }

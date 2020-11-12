@@ -1,42 +1,55 @@
-# More exclusions can be added similar with: -not -path './testbed/*'
+# All source code excluding any third party code and excluding the testbed.
+# This is the code that we want to run tests for and lint, staticcheck, etc.
 ALL_SRC := $(shell find . -name '*.go' \
-                                -type f | sort)
+							-not -path './testbed/*' \
+							-not -path '*/internal/data/opentelemetry-proto/*' \
+							-not -path '*/internal/data/opentelemetry-proto-gen/*' \
+							-not -path './.circleci/scripts/reportgenerator/*' \
+							-not -path './examples/demo/app/*' \
+							-type f | sort)
 
-# More exclusions can be added similar with: -not -path './testbed/*'
-ALL_SRC_NO_TESTBED := $(shell find . -name '*.go' \
-                                            -not -path './testbed/*' \
-                                            -type f | sort)
+# ALL_PKGS is the list of all packages where ALL_SRC files reside.
+ALL_PKGS := $(shell go list $(sort $(dir $(ALL_SRC))))
 
 # All source code and documents. Used in spell check.
 ALL_DOC := $(shell find . \( -name "*.md" -o -name "*.yaml" \) \
                                 -type f | sort)
 
-# ALL_PKGS is used with 'go test'
-ALL_PKGS:= $(shell go list $(sort $(dir $(ALL_SRC))))
-
-# ALL_PKGS_NO_TESTBED is used with 'go cover'
-ALL_PKGS_NO_TESTBED := $(shell go list $(sort $(dir $(ALL_SRC_NO_TESTBED))))
-
-GOTEST_OPT?= -race -timeout 180s
+GOTEST_OPT?= -v -race -timeout 180s
 GO_ACC=go-acc
 GOTEST=go test
 GOOS=$(shell go env GOOS)
 GOARCH=$(shell go env GOARCH)
-ADDLICENCESE= addlicense
+ADDLICENSE= addlicense
 MISSPELL=misspell -error
 MISSPELL_CORRECTION=misspell -w
 LINT=golangci-lint
 IMPI=impi
 GOSEC=gosec
 STATIC_CHECK=staticcheck
+# BUILD_TYPE should be one of (dev, release).
+BUILD_TYPE?=release
 
 GIT_SHA=$(shell git rev-parse --short HEAD)
-BUILD_INFO_IMPORT_PATH=github.com/open-telemetry/opentelemetry-collector/internal/version
+BUILD_INFO_IMPORT_PATH=go.opentelemetry.io/collector/internal/version
 BUILD_X1=-X $(BUILD_INFO_IMPORT_PATH).GitHash=$(GIT_SHA)
 ifdef VERSION
 BUILD_X2=-X $(BUILD_INFO_IMPORT_PATH).Version=$(VERSION)
 endif
-BUILD_INFO=-ldflags "${BUILD_X1} ${BUILD_X2}"
+BUILD_X3=-X $(BUILD_INFO_IMPORT_PATH).BuildType=$(BUILD_TYPE)
+BUILD_INFO=-ldflags "${BUILD_X1} ${BUILD_X2} ${BUILD_X3}"
+
+RUN_CONFIG?=examples/local/otel-config.yaml
+
+CONTRIB_PATH=$(CURDIR)/../opentelemetry-collector-contrib
+
+# Function to execute a command. Note the empty line before endef to make sure each command
+# gets executed separately instead of concatenated with previous one.
+# Accepts command to execute as first parameter.
+define exec-command
+$(1)
+
+endef
 
 all-srcs:
 	@echo $(ALL_SRC) | tr ' ' '\n' | sort
@@ -49,13 +62,21 @@ all-pkgs:
 .PHONY: all
 all: checklicense impi lint misspell test otelcol
 
-.PHONY: testbed-runtests
-testbed-runtests: otelcol
+.PHONY: testbed-loadtest
+testbed-loadtest: otelcol
 	cd ./testbed/tests && ./runtests.sh
 
-.PHONY: testbed-listtests
-testbed-listtests:
-	TESTBED_CONFIG=local.yaml $(GOTEST) -v ./testbed/tests --test.list '.*'|head -n -1
+.PHONY: testbed-correctness
+testbed-correctness: otelcol
+	cd ./testbed/correctness/traces && ./runtests.sh
+
+.PHONY: testbed-list-loadtest
+testbed-list-loadtest:
+	RUN_TESTBED=1 $(GOTEST) -v ./testbed/tests --test.list '.*'| grep "^Test"
+
+.PHONY: testbed-list-correctness
+testbed-list-correctness:
+	RUN_TESTBED=1 $(GOTEST) -v ./testbed/correctness --test.list '.*'| grep "^Test"
 
 .PHONY: test
 test:
@@ -63,27 +84,27 @@ test:
 
 .PHONY: benchmark
 benchmark:
-	$(GOTEST) -bench=. -run=notests $(ALL_PKGS_NO_TESTBED)
+	$(GOTEST) -bench=. -run=notests $(ALL_PKGS)
 
 .PHONY: test-with-cover
 test-with-cover:
 	@echo Verifying that all packages have test files to count in coverage
-	@internal/buildscripts/check-test-files.sh $(subst github.com/open-telemetry/opentelemetry-collector/,./,$(ALL_PKGS_NO_TESTBED))
+	@internal/buildscripts/check-test-files.sh $(subst go.opentelemetry.io/collector,.,$(ALL_PKGS))
 	@echo pre-compiling tests
-	@time go test -i $(ALL_PKGS_NO_TESTBED)
-	$(GO_ACC) $(ALL_PKGS_NO_TESTBED)
+	@time go test -i $(ALL_PKGS)
+	$(GO_ACC) $(ALL_PKGS)
 	go tool cover -html=coverage.txt -o coverage.html
 
 .PHONY: addlicense
 addlicense:
-	$(ADDLICENCESE) -y '' -c 'OpenTelemetry Authors' $(ALL_SRC)
+	$(ADDLICENSE) -y "" -c 'The OpenTelemetry Authors' $(ALL_SRC)
 
 .PHONY: checklicense
 checklicense:
-	@ADDLICENCESEOUT=`$(ADDLICENCESE) -check $(ALL_SRC) 2>&1`; \
-		if [ "$$ADDLICENCESEOUT" ]; then \
-			echo "$(ADDLICENCESE) FAILED => add License errors:\n"; \
-			echo "$$ADDLICENCESEOUT\n"; \
+	@ADDLICENSEOUT=`$(ADDLICENSE) -check $(ALL_SRC) 2>&1`; \
+		if [ "$$ADDLICENSEOUT" ]; then \
+			echo "$(ADDLICENSE) FAILED => add License errors:\n"; \
+			echo "$$ADDLICENSEOUT\n"; \
 			echo "Use 'make addlicense' to fix this."; \
 			exit 1; \
 		else \
@@ -101,11 +122,11 @@ misspell-correction:
 .PHONY: lint-gosec
 lint-gosec:
 	# TODO: Consider to use gosec from golangci-lint
-	$(GOSEC) -quiet -exclude=G104 ./...
+	$(GOSEC) -quiet -exclude=G104 $(ALL_PKGS)
 
 .PHONY: lint-static-check
 lint-static-check:
-	@STATIC_CHECK_OUT=`$(STATIC_CHECK) ./... 2>&1`; \
+	@STATIC_CHECK_OUT=`$(STATIC_CHECK) $(ALL_PKGS) 2>&1`; \
 		if [ "$$STATIC_CHECK_OUT" ]; then \
 			echo "$(STATIC_CHECK) FAILED => static check errors:\n"; \
 			echo "$$STATIC_CHECK_OUT\n"; \
@@ -120,23 +141,35 @@ lint: lint-static-check
 
 .PHONY: impi
 impi:
-	@$(IMPI) --local github.com/open-telemetry/opentelemetry-collector --scheme stdThirdPartyLocal ./...
+	@$(IMPI) --local go.opentelemetry.io/collector --scheme stdThirdPartyLocal --skip internal/data/opentelemetry-proto ./...
+
+.PHONY: fmt
+fmt:
+	gofmt  -w -s ./
+	goimports -w  -local go.opentelemetry.io/collector ./
 
 .PHONY: install-tools
 install-tools:
 	go install github.com/client9/misspell/cmd/misspell
-	go install github.com/google/addlicense
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint
+	go install github.com/google/addlicense
 	go install github.com/jstemmer/go-junit-report
+	go install github.com/mjibson/esc
 	go install github.com/ory/go-acc
 	go install github.com/pavius/impi/cmd/impi
 	go install github.com/securego/gosec/cmd/gosec
-	go install honnef.co/go/tools/cmd/staticcheck
 	go install github.com/tcnksm/ghr
+	go install golang.org/x/tools/cmd/goimports
+	go install honnef.co/go/tools/cmd/staticcheck
 
 .PHONY: otelcol
 otelcol:
-	GO111MODULE=on CGO_ENABLED=0 go build -o ./bin/otelcol_$(GOOS)_$(GOARCH) $(BUILD_INFO) ./cmd/otelcol
+	go generate ./...
+	GO111MODULE=on CGO_ENABLED=0 go build -o ./bin/otelcol_$(GOOS)_$(GOARCH)$(EXTENSION) $(BUILD_INFO) ./cmd/otelcol
+
+.PHONY: run
+run:
+	GO111MODULE=on go run --race ./cmd/otelcol/... --config ${RUN_CONFIG}
 
 .PHONY: docker-component # Not intended to be used directly
 docker-component: check-component
@@ -150,6 +183,18 @@ check-component:
 ifndef COMPONENT
 	$(error COMPONENT variable was not defined)
 endif
+
+.PHONY: add-tag
+add-tag:
+	@[ "${TAG}" ] || ( echo ">> env var TAG is not set"; exit 1 )
+	@echo "Adding tag ${TAG}"
+	@git tag -a ${TAG} -s -m "Version ${TAG}"
+
+.PHONY: delete-tag
+delete-tag:
+	@[ "${TAG}" ] || ( echo ">> env var TAG is not set"; exit 1 )
+	@echo "Deleting tag ${TAG}"
+	@git tag -d ${TAG}
 
 .PHONY: docker-otelcol
 docker-otelcol:
@@ -175,4 +220,103 @@ binaries-linux_arm64:
 
 .PHONY: binaries-windows_amd64
 binaries-windows_amd64:
-	GOOS=windows GOARCH=amd64 $(MAKE) binaries
+	GOOS=windows GOARCH=amd64 EXTENSION=.exe $(MAKE) binaries
+
+.PHONY: deb-rpm-package
+%-package: ARCH ?= amd64
+%-package:
+	$(MAKE) binaries-linux_$(ARCH)
+	docker build -t otelcol-fpm internal/buildscripts/packaging/fpm
+	docker run --rm -v $(CURDIR):/repo -e PACKAGE=$* -e VERSION=$(VERSION) -e ARCH=$(ARCH) otelcol-fpm
+
+# Definitions for ProtoBuf generation.
+
+# The source directory for OTLP ProtoBufs.
+OPENTELEMETRY_PROTO_SRC_DIR=internal/data/opentelemetry-proto
+
+# Find all .proto files.
+OPENTELEMETRY_PROTO_FILES := $(subst $(OPENTELEMETRY_PROTO_SRC_DIR)/,,$(wildcard $(OPENTELEMETRY_PROTO_SRC_DIR)/opentelemetry/proto/*/v1/*.proto $(OPENTELEMETRY_PROTO_SRC_DIR)/opentelemetry/proto/collector/*/v1/*.proto))
+
+# Target directory to write generated files to.
+PROTO_TARGET_GEN_DIR=internal/data/opentelemetry-proto-gen
+
+# Go package name to use for generated files.
+PROTO_PACKAGE=go.opentelemetry.io/collector/$(PROTO_TARGET_GEN_DIR)
+
+# Intermediate directory used during generation.
+PROTO_INTERMEDIATE_DIR=internal/data/.patched-otlp-proto
+
+DOCKER_PROTOBUF ?= otel/build-protobuf:0.1.0
+PROTOC := docker run --rm -u ${shell id -u} -v${PWD}:${PWD} -w${PWD}/$(PROTO_INTERMEDIATE_DIR) ${DOCKER_PROTOBUF} --proto_path=${PWD}
+PROTO_INCLUDES := -I/usr/include/github.com/gogo/protobuf -I./
+
+# Generate OTLP Protobuf Go files. This will place generated files in PROTO_TARGET_GEN_DIR.
+genproto:
+	git submodule update --init
+	# Call a sub-make to ensure OPENTELEMETRY_PROTO_FILES is populated after the submodule
+	# files are present.
+	$(MAKE) genproto_sub
+	$(MAKE) fmt
+
+genproto_sub:
+	@echo Generating code for the following files:
+	@$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,echo $(file)))
+
+	@echo Delete intermediate directory.
+	@rm -rf $(PROTO_INTERMEDIATE_DIR)
+
+	@echo Copy .proto file to intermediate directory.
+	mkdir -p $(PROTO_INTERMEDIATE_DIR)/opentelemetry
+	cp -R $(OPENTELEMETRY_PROTO_SRC_DIR)/opentelemetry/* $(PROTO_INTERMEDIATE_DIR)/opentelemetry
+
+	# Patch proto files. See proto_patch.sed for patching rules.
+	@echo Modify them in the intermediate directory.
+	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,sed -f proto_patch.sed $(OPENTELEMETRY_PROTO_SRC_DIR)/$(file) > $(PROTO_INTERMEDIATE_DIR)/$(file)))
+
+	@echo Generate Go code from .proto files in intermediate directory.
+	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,$(PROTOC) $(PROTO_INCLUDES) --gogofaster_out=plugins=grpc:./ $(file)))
+
+	@echo Generate gRPC gateway code.
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/trace/v1/trace_service_http.yaml:./ opentelemetry/proto/collector/trace/v1/trace_service.proto
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/metrics/v1/metrics_service_http.yaml:./ opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/logs/v1/logs_service_http.yaml:./ opentelemetry/proto/collector/logs/v1/logs_service.proto
+
+	@echo Move generated code to target directory.
+	mkdir -p $(PROTO_TARGET_GEN_DIR)
+	cp -R $(PROTO_INTERMEDIATE_DIR)/$(PROTO_PACKAGE)/* $(PROTO_TARGET_GEN_DIR)/
+	rm -rf $(PROTO_INTERMEDIATE_DIR)/go.opentelemetry.io
+
+	@rm -rf $(OPENTELEMETRY_PROTO_SRC_DIR)/*
+	@rm -rf $(OPENTELEMETRY_PROTO_SRC_DIR)/.* > /dev/null 2>&1 || true
+
+# Generate structs, functions and tests for pdata package. Must be used after any changes
+# to proto and after running `make genproto`
+genpdata:
+	go run cmd/pdatagen/main.go
+	$(MAKE) fmt
+
+# Checks that the HEAD of the contrib repo checked out in CONTRIB_PATH compiles
+# against the current version of this repo.
+.PHONY: check-contrib
+check-contrib:
+	@echo Setting contrib at $(CONTRIB_PATH) to use this core checkout
+	make -C $(CONTRIB_PATH) for-all CMD="go mod edit -replace go.opentelemetry.io/collector=$(CURDIR)"
+	make -C $(CONTRIB_PATH) test
+	@echo Restoring contrib to no longer use this core checkout
+	make -C $(CONTRIB_PATH) for-all CMD="go mod edit -dropreplace go.opentelemetry.io/collector"
+
+# List of directories where certificates are stored for unit tests.
+CERT_DIRS := config/configgrpc/testdata \
+             config/confighttp/testdata \
+             receiver/jaegerreceiver/testdata \
+             exporter/jaegerexporter/testdata
+
+# Generate certificates for unit tests relying on certificates.
+.PHONY: certs
+certs:
+	$(foreach dir, $(CERT_DIRS), $(call exec-command, @internal/buildscripts/gen-certs.sh -o $(dir)))
+
+# Generate certificates for unit tests relying on certificates without copying certs to specific test directories.
+.PHONY: certs-dryrun
+certs-dryrun:
+	@internal/buildscripts/gen-certs.sh -d

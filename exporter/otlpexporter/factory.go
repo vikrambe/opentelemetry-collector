@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +17,10 @@ package otlpexporter
 import (
 	"context"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configgrpc"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configmodels"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
 const (
@@ -27,42 +28,106 @@ const (
 	typeStr = "otlp"
 )
 
-// Factory is the factory for OpenCensus exporter.
-type Factory struct {
+// NewFactory creates a factory for OTLP exporter.
+func NewFactory() component.ExporterFactory {
+	return exporterhelper.NewFactory(
+		typeStr,
+		createDefaultConfig,
+		exporterhelper.WithTraces(createTraceExporter),
+		exporterhelper.WithMetrics(createMetricsExporter),
+		exporterhelper.WithLogs(createLogsExporter))
 }
 
-// Type gets the type of the Exporter config created by this factory.
-func (f *Factory) Type() string {
-	return typeStr
-}
-
-// CreateDefaultConfig creates the default configuration for exporter.
-func (f *Factory) CreateDefaultConfig() configmodels.Exporter {
+func createDefaultConfig() configmodels.Exporter {
 	return &Config{
 		ExporterSettings: configmodels.ExporterSettings{
 			TypeVal: typeStr,
 			NameVal: typeStr,
 		},
-		GRPCSettings: configgrpc.GRPCSettings{
+		TimeoutSettings: exporterhelper.CreateDefaultTimeoutSettings(),
+		RetrySettings:   exporterhelper.CreateDefaultRetrySettings(),
+		QueueSettings:   exporterhelper.CreateDefaultQueueSettings(),
+		GRPCClientSettings: configgrpc.GRPCClientSettings{
 			Headers: map[string]string{},
+			// We almost read 0 bytes, so no need to tune ReadBufferSize.
+			WriteBufferSize: 512 * 1024,
 		},
 	}
 }
 
-// CreateTraceExporter creates a trace exporter based on this config.
-func (f *Factory) CreateTraceExporter(
-	ctx context.Context,
+func createTraceExporter(
+	_ context.Context,
 	params component.ExporterCreateParams,
 	cfg configmodels.Exporter,
-) (component.TraceExporter, error) {
-	return NewTraceExporter(ctx, params, cfg)
+) (component.TracesExporter, error) {
+	oce, err := newExporter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	oCfg := cfg.(*Config)
+	oexp, err := exporterhelper.NewTraceExporter(
+		cfg,
+		params.Logger,
+		oce.pushTraceData,
+		exporterhelper.WithTimeout(oCfg.TimeoutSettings),
+		exporterhelper.WithRetry(oCfg.RetrySettings),
+		exporterhelper.WithQueue(oCfg.QueueSettings),
+		exporterhelper.WithShutdown(oce.shutdown))
+	if err != nil {
+		return nil, err
+	}
+
+	return oexp, nil
 }
 
-// CreateMetricsExporter creates a metrics exporter based on this config.
-func (f *Factory) CreateMetricsExporter(
-	ctx context.Context,
+func createMetricsExporter(
+	_ context.Context,
 	params component.ExporterCreateParams,
 	cfg configmodels.Exporter,
 ) (component.MetricsExporter, error) {
-	return NewMetricsExporter(ctx, params, cfg)
+	oce, err := newExporter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	oCfg := cfg.(*Config)
+	oexp, err := exporterhelper.NewMetricsExporter(
+		cfg,
+		params.Logger,
+		oce.pushMetricsData,
+		exporterhelper.WithTimeout(oCfg.TimeoutSettings),
+		exporterhelper.WithRetry(oCfg.RetrySettings),
+		exporterhelper.WithQueue(oCfg.QueueSettings),
+		exporterhelper.WithShutdown(oce.shutdown),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return oexp, nil
+}
+
+func createLogsExporter(
+	_ context.Context,
+	params component.ExporterCreateParams,
+	cfg configmodels.Exporter,
+) (component.LogsExporter, error) {
+	oce, err := newExporter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	oCfg := cfg.(*Config)
+	oexp, err := exporterhelper.NewLogsExporter(
+		cfg,
+		params.Logger,
+		oce.pushLogData,
+		exporterhelper.WithTimeout(oCfg.TimeoutSettings),
+		exporterhelper.WithRetry(oCfg.RetrySettings),
+		exporterhelper.WithQueue(oCfg.QueueSettings),
+		exporterhelper.WithShutdown(oce.shutdown),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return oexp, nil
 }

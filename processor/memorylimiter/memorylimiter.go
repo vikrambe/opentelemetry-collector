@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,7 @@ package memorylimiter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -24,12 +25,14 @@ import (
 	"go.opencensus.io/stats"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdatautil"
-	"github.com/open-telemetry/opentelemetry-collector/obsreport"
-	"github.com/open-telemetry/opentelemetry-collector/processor"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/obsreport"
+	"go.opentelemetry.io/collector/processor"
+	"go.opentelemetry.io/collector/processor/memorylimiter/internal/iruntime"
+)
+
+const (
+	mibBytes = 1024 * 1024
 )
 
 var (
@@ -39,26 +42,28 @@ var (
 
 	// Construction errors
 
-	errNilNextConsumer = errors.New("nil nextConsumer")
-
 	errCheckIntervalOutOfRange = errors.New(
 		"checkInterval must be greater than zero")
 
-	errMemAllocLimitOutOfRange = errors.New(
-		"memAllocLimit must be greater than zero")
+	errLimitOutOfRange = errors.New(
+		"memAllocLimit or memoryLimitPercentage must be greater than zero")
 
 	errMemSpikeLimitOutOfRange = errors.New(
 		"memSpikeLimit must be smaller than memAllocLimit")
+
+	errPercentageLimitOutOfRange = errors.New(
+		"memoryLimitPercentage and memorySpikePercentage must be greater than zero and less than or equal to hundred",
+	)
 )
 
-type memoryLimiter struct {
-	traceConsumer   consumer.TraceConsumer
-	metricsConsumer consumer.MetricsConsumer
+// make it overridable by tests
+var getMemoryFn = iruntime.TotalMemory
 
-	memAllocLimit uint64
-	memSpikeLimit uint64
-	memCheckWait  time.Duration
-	ballastSize   uint64
+type memoryLimiter struct {
+	decision dropDecision
+
+	memCheckWait time.Duration
+	ballastSize  uint64
 
 	// forceDrop is used atomically to indicate when data should be dropped.
 	forceDrop int64
@@ -76,40 +81,34 @@ type memoryLimiter struct {
 }
 
 // newMemoryLimiter returns a new memorylimiter processor.
-func newMemoryLimiter(
-	logger *zap.Logger,
-	traceConsumer consumer.TraceConsumer,
-	metricsConsumer consumer.MetricsConsumer,
-	cfg *Config) (DualTypeProcessor, error) {
-	const mibBytes = 1024 * 1024
-	memAllocLimit := uint64(cfg.MemoryLimitMiB) * mibBytes
-	memSpikeLimit := uint64(cfg.MemorySpikeLimitMiB) * mibBytes
+func newMemoryLimiter(logger *zap.Logger, cfg *Config) (*memoryLimiter, error) {
 	ballastSize := uint64(cfg.BallastSizeMiB) * mibBytes
 
-	if traceConsumer == nil && metricsConsumer == nil {
-		return nil, errNilNextConsumer
-	}
 	if cfg.CheckInterval <= 0 {
 		return nil, errCheckIntervalOutOfRange
 	}
-	if memAllocLimit == 0 {
-		return nil, errMemAllocLimitOutOfRange
-	}
-	if memSpikeLimit >= memAllocLimit {
-		return nil, errMemSpikeLimitOutOfRange
+	if cfg.MemoryLimitMiB == 0 && cfg.MemoryLimitPercentage == 0 {
+		return nil, errLimitOutOfRange
 	}
 
+	decision, err := getDecision(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("Memory limiter configured",
+		zap.Uint64("limit_mib", decision.memAllocLimit),
+		zap.Uint64("spike_limit_mib", decision.memSpikeLimit),
+		zap.Duration("check_interval", cfg.CheckInterval))
+
 	ml := &memoryLimiter{
-		traceConsumer:   traceConsumer,
-		metricsConsumer: metricsConsumer,
-		memAllocLimit:   memAllocLimit,
-		memSpikeLimit:   memSpikeLimit,
-		memCheckWait:    cfg.CheckInterval,
-		ballastSize:     ballastSize,
-		ticker:          time.NewTicker(cfg.CheckInterval),
-		readMemStatsFn:  runtime.ReadMemStats,
-		procName:        cfg.Name(),
-		logger:          logger,
+		decision:       *decision,
+		memCheckWait:   cfg.CheckInterval,
+		ballastSize:    ballastSize,
+		ticker:         time.NewTicker(cfg.CheckInterval),
+		readMemStatsFn: runtime.ReadMemStats,
+		procName:       cfg.Name(),
+		logger:         logger,
 	}
 
 	ml.startMonitoring()
@@ -117,12 +116,30 @@ func newMemoryLimiter(
 	return ml, nil
 }
 
-func (ml *memoryLimiter) ConsumeTraces(
-	ctx context.Context,
-	td pdata.Traces,
-) error {
+func getDecision(cfg *Config, logger *zap.Logger) (*dropDecision, error) {
+	memAllocLimit := uint64(cfg.MemoryLimitMiB) * mibBytes
+	memSpikeLimit := uint64(cfg.MemorySpikeLimitMiB) * mibBytes
+	if cfg.MemoryLimitMiB != 0 {
+		return newFixedDecision(memAllocLimit, memSpikeLimit)
+	}
+	totalMemory, err := getMemoryFn()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get total memory, use fixed memory settings (limit_mib): %w", err)
+	}
+	logger.Info("Using percentage memory limiter",
+		zap.Int64("total_memory", totalMemory),
+		zap.Uint32("limit_percentage", cfg.MemoryLimitPercentage),
+		zap.Uint32("spike_limit_percentage", cfg.MemorySpikePercentage))
+	return newPercentageDecision(totalMemory, int64(cfg.MemoryLimitPercentage), int64(cfg.MemorySpikePercentage))
+}
 
-	ctx = obsreport.ProcessorContext(ctx, ml.procName)
+func (ml *memoryLimiter) shutdown(context.Context) error {
+	ml.ticker.Stop()
+	return nil
+}
+
+// ProcessTraces implements the TProcessor interface
+func (ml *memoryLimiter) ProcessTraces(ctx context.Context, td pdata.Traces) (pdata.Traces, error) {
 	numSpans := td.SpanCount()
 	if ml.forcingDrop() {
 		stats.Record(
@@ -137,25 +154,19 @@ func (ml *memoryLimiter) ConsumeTraces(
 		// 	callstack.
 		obsreport.ProcessorTraceDataRefused(ctx, numSpans)
 
-		return errForcedDrop
+		return td, errForcedDrop
 	}
 
 	// Even if the next consumer returns error record the data as accepted by
 	// this processor.
 	obsreport.ProcessorTraceDataAccepted(ctx, numSpans)
-	return ml.traceConsumer.ConsumeTraces(ctx, td)
+	return td, nil
 }
 
-func (ml *memoryLimiter) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
-
-	ctx = obsreport.ProcessorContext(ctx, ml.procName)
-	_, numDataPoints := pdatautil.MetricAndDataPointCount(md)
+// ProcessMetrics implements the MProcessor interface
+func (ml *memoryLimiter) ProcessMetrics(ctx context.Context, md pdata.Metrics) (pdata.Metrics, error) {
+	_, numDataPoints := md.MetricAndDataPointCount()
 	if ml.forcingDrop() {
-		stats.Record(
-			ctx,
-			processor.StatDroppedMetricCount.M(int64(numDataPoints)),
-			processor.StatMetricBatchesDroppedCount.M(1))
-
 		// TODO: actually to be 100% sure that this is "refused" and not "dropped"
 		// 	it is necessary to check the pipeline to see if this is directly connected
 		// 	to a receiver (ie.: a receiver is on the call stack). For now it
@@ -163,43 +174,49 @@ func (ml *memoryLimiter) ConsumeMetrics(ctx context.Context, md pdata.Metrics) e
 		// 	callstack.
 		obsreport.ProcessorMetricsDataRefused(ctx, numDataPoints)
 
-		return errForcedDrop
+		return md, errForcedDrop
 	}
 
 	// Even if the next consumer returns error record the data as accepted by
 	// this processor.
 	obsreport.ProcessorMetricsDataAccepted(ctx, numDataPoints)
-	return ml.metricsConsumer.ConsumeMetrics(ctx, md)
+	return md, nil
 }
 
-func (ml *memoryLimiter) GetCapabilities() component.ProcessorCapabilities {
-	return component.ProcessorCapabilities{MutatesConsumedData: false}
+// ProcessLogs implements the LProcessor interface
+func (ml *memoryLimiter) ProcessLogs(ctx context.Context, ld pdata.Logs) (pdata.Logs, error) {
+	numRecords := ld.LogRecordCount()
+	if ml.forcingDrop() {
+		// TODO: actually to be 100% sure that this is "refused" and not "dropped"
+		// 	it is necessary to check the pipeline to see if this is directly connected
+		// 	to a receiver (ie.: a receiver is on the call stack). For now it
+		// 	assumes that the pipeline is properly configured and a receiver is on the
+		// 	callstack.
+		obsreport.ProcessorLogRecordsRefused(ctx, numRecords)
+
+		return ld, errForcedDrop
+	}
+
+	// Even if the next consumer returns error record the data as accepted by
+	// this processor.
+	obsreport.ProcessorLogRecordsAccepted(ctx, numRecords)
+	return ld, nil
 }
 
-func (ml *memoryLimiter) Start(_ context.Context, _ component.Host) error {
-	return nil
-}
-
-func (ml *memoryLimiter) Shutdown(context.Context) error {
-	ml.ticker.Stop()
-	return nil
-}
-
-func (ml *memoryLimiter) readMemStats(ms *runtime.MemStats) {
+func (ml *memoryLimiter) readMemStats() *runtime.MemStats {
+	ms := &runtime.MemStats{}
 	ml.readMemStatsFn(ms)
 	// If proper configured ms.Alloc should be at least ml.ballastSize but since
 	// a misconfiguration is possible check for that here.
 	if ms.Alloc >= ml.ballastSize {
 		ms.Alloc -= ml.ballastSize
-	} else {
+	} else if !ml.configMismatchedLogged {
 		// This indicates misconfiguration. Log it once.
-		if !ml.configMismatchedLogged {
-			ml.configMismatchedLogged = true
-			ml.logger.Warn(typeStr+" is likely incorrectly configured. "+ballastSizeMibKey+
-				" must be set equal to --mem-ballast-size-mib command line option.",
-				zap.String("processor", ml.procName))
-		}
+		ml.configMismatchedLogged = true
+		ml.logger.Warn(typeStr + " is likely incorrectly configured. " + ballastSizeMibKey +
+			" must be set equal to --mem-ballast-size-mib command line option.")
 	}
+	return ms
 }
 
 // startMonitoring starts a ticker'd goroutine that will check memory usage
@@ -218,17 +235,12 @@ func (ml *memoryLimiter) forcingDrop() bool {
 }
 
 func (ml *memoryLimiter) memCheck() {
-	ms := &runtime.MemStats{}
-	ml.readMemStats(ms)
+	ms := ml.readMemStats()
 	ml.memLimiting(ms)
 }
 
-func (ml *memoryLimiter) shouldForceDrop(ms *runtime.MemStats) bool {
-	return ml.memAllocLimit <= ms.Alloc || ml.memAllocLimit-ms.Alloc <= ml.memSpikeLimit
-}
-
 func (ml *memoryLimiter) memLimiting(ms *runtime.MemStats) {
-	if !ml.shouldForceDrop(ms) {
+	if !ml.decision.shouldDrop(ms) {
 		atomic.StoreInt64(&ml.forceDrop, 0)
 	} else {
 		atomic.StoreInt64(&ml.forceDrop, 1)
@@ -236,4 +248,30 @@ func (ml *memoryLimiter) memLimiting(ms *runtime.MemStats) {
 		// the desired level.
 		runtime.GC()
 	}
+}
+
+type dropDecision struct {
+	memAllocLimit uint64
+	memSpikeLimit uint64
+}
+
+func (d dropDecision) shouldDrop(ms *runtime.MemStats) bool {
+	return d.memAllocLimit <= ms.Alloc || d.memAllocLimit-ms.Alloc <= d.memSpikeLimit
+}
+
+func newFixedDecision(memAllocLimit, memSpikeLimit uint64) (*dropDecision, error) {
+	if memSpikeLimit >= memAllocLimit {
+		return nil, errMemSpikeLimitOutOfRange
+	}
+	return &dropDecision{
+		memAllocLimit: memAllocLimit,
+		memSpikeLimit: memSpikeLimit,
+	}, nil
+}
+
+func newPercentageDecision(totalMemory int64, percentageLimit, percentageSpike int64) (*dropDecision, error) {
+	if percentageLimit > 100 || percentageLimit <= 0 || percentageSpike > 100 || percentageSpike <= 0 {
+		return nil, errPercentageLimitOutOfRange
+	}
+	return newFixedDecision(uint64(percentageLimit*totalMemory)/100, uint64(percentageSpike*totalMemory)/100)
 }

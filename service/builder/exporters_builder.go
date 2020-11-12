@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,32 +20,24 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/component/componenterror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configerror"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenterror"
+	"go.opentelemetry.io/collector/config/configerror"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 // builtExporter is an exporter that is built based on a config. It can have
 // a trace and/or a metrics consumer and have a shutdown function.
 type builtExporter struct {
-	logger *zap.Logger
-	te     component.TraceExporterBase
-	me     component.MetricsExporterBase
+	logger        *zap.Logger
+	expByDataType map[configmodels.DataType]component.Exporter
 }
 
 // Start the exporter.
-func (exp *builtExporter) Start(ctx context.Context, host component.Host) error {
+func (bexp *builtExporter) Start(ctx context.Context, host component.Host) error {
 	var errors []error
-	if exp.te != nil {
-		err := exp.te.Start(ctx, host)
-		if err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	if exp.me != nil {
-		err := exp.me.Start(ctx, host)
+	for _, exporter := range bexp.expByDataType {
+		err := exporter.Start(ctx, host)
 		if err != nil {
 			errors = append(errors, err)
 		}
@@ -55,21 +47,40 @@ func (exp *builtExporter) Start(ctx context.Context, host component.Host) error 
 }
 
 // Shutdown the trace component and the metrics component of an exporter.
-func (exp *builtExporter) Shutdown(ctx context.Context) error {
+func (bexp *builtExporter) Shutdown(ctx context.Context) error {
 	var errors []error
-	if exp.te != nil {
-		if err := exp.te.Shutdown(ctx); err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	if exp.me != nil {
-		if err := exp.me.Shutdown(ctx); err != nil {
+	for _, exporter := range bexp.expByDataType {
+		err := exporter.Shutdown(ctx)
+		if err != nil {
 			errors = append(errors, err)
 		}
 	}
 
 	return componenterror.CombineErrors(errors)
+}
+
+func (bexp *builtExporter) getTraceExporter() component.TracesExporter {
+	exp := bexp.expByDataType[configmodels.TracesDataType]
+	if exp == nil {
+		return nil
+	}
+	return exp.(component.TracesExporter)
+}
+
+func (bexp *builtExporter) getMetricExporter() component.MetricsExporter {
+	exp := bexp.expByDataType[configmodels.MetricsDataType]
+	if exp == nil {
+		return nil
+	}
+	return exp.(component.MetricsExporter)
+}
+
+func (bexp *builtExporter) getLogExporter() component.LogsExporter {
+	exp := bexp.expByDataType[configmodels.LogsDataType]
+	if exp == nil {
+		return nil
+	}
+	return exp.(component.LogsExporter)
 }
 
 // Exporters is a map of exporters created from exporter configs.
@@ -98,10 +109,24 @@ func (exps Exporters) ShutdownAll(ctx context.Context) error {
 		}
 	}
 
-	if len(errs) != 0 {
-		return componenterror.CombineErrors(errs)
+	return componenterror.CombineErrors(errs)
+}
+
+func (exps Exporters) ToMapByDataType() map[configmodels.DataType]map[configmodels.Exporter]component.Exporter {
+
+	exportersMap := make(map[configmodels.DataType]map[configmodels.Exporter]component.Exporter)
+
+	exportersMap[configmodels.TracesDataType] = make(map[configmodels.Exporter]component.Exporter, len(exps))
+	exportersMap[configmodels.MetricsDataType] = make(map[configmodels.Exporter]component.Exporter, len(exps))
+	exportersMap[configmodels.LogsDataType] = make(map[configmodels.Exporter]component.Exporter, len(exps))
+
+	for cfg, bexp := range exps {
+		for t, exp := range bexp.expByDataType {
+			exportersMap[t][cfg] = exp
+		}
 	}
-	return nil
+
+	return exportersMap
 }
 
 type dataTypeRequirement struct {
@@ -118,17 +143,19 @@ type exportersRequiredDataTypes map[configmodels.Exporter]dataTypeRequirements
 // ExportersBuilder builds exporters from config.
 type ExportersBuilder struct {
 	logger    *zap.Logger
+	appInfo   component.ApplicationStartInfo
 	config    *configmodels.Config
-	factories map[string]component.ExporterFactoryBase
+	factories map[configmodels.Type]component.ExporterFactory
 }
 
 // NewExportersBuilder creates a new ExportersBuilder. Call BuildExporters() on the returned value.
 func NewExportersBuilder(
 	logger *zap.Logger,
+	appInfo component.ApplicationStartInfo,
 	config *configmodels.Config,
-	factories map[string]component.ExporterFactoryBase,
+	factories map[configmodels.Type]component.ExporterFactory,
 ) *ExportersBuilder {
-	return &ExportersBuilder{logger.With(zap.String(kindLogKey, kindLogExporter)), config, factories}
+	return &ExportersBuilder{logger.With(zap.String(kindLogKey, kindLogsExporter)), appInfo, config, factories}
 }
 
 // BuildExporters exporters from config.
@@ -141,8 +168,8 @@ func (eb *ExportersBuilder) Build() (Exporters, error) {
 
 	// BuildExporters exporters based on configuration and required input data types.
 	for _, cfg := range eb.config.Exporters {
-		componentLogger := eb.logger.With(zap.String(typeLogKey, cfg.Type()), zap.String(nameLogKey, cfg.Name()))
-		exp, err := eb.buildExporter(componentLogger, cfg, exporterInputDataTypes)
+		componentLogger := eb.logger.With(zap.String(typeLogKey, string(cfg.Type())), zap.String(nameLogKey, cfg.Name()))
+		exp, err := eb.buildExporter(context.Background(), componentLogger, eb.appInfo, cfg, exporterInputDataTypes)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +214,9 @@ func (eb *ExportersBuilder) calcExportersRequiredDataTypes() exportersRequiredDa
 }
 
 func (eb *ExportersBuilder) buildExporter(
+	ctx context.Context,
 	logger *zap.Logger,
+	appInfo component.ApplicationStartInfo,
 	config configmodels.Exporter,
 	exportersInputDataTypes exportersRequiredDataTypes,
 ) (*builtExporter, error) {
@@ -197,56 +226,81 @@ func (eb *ExportersBuilder) buildExporter(
 	}
 
 	exporter := &builtExporter{
-		logger: logger,
+		logger:        logger,
+		expByDataType: make(map[configmodels.DataType]component.Exporter, 3),
 	}
 
 	inputDataTypes := exportersInputDataTypes[config]
 	if inputDataTypes == nil {
-		// TODO  https://github.com/open-telemetry/opentelemetry-collector/issues/294
-		// Move this validation to config/config.go:validateConfig
-		// No data types where requested for this exporter. This can only happen
-		// if there are no pipelines associated with the exporter.
-		logger.Warn("Exportee is not associated with any pipeline and will not export data.")
+		eb.logger.Info("Ignoring exporter as it is not used by any pipeline")
 		return exporter, nil
 	}
 
-	if requirement, ok := inputDataTypes[configmodels.TracesDataType]; ok {
-		// Traces data type is required. Create a trace exporter based on config.
-		te, err := createTraceExporter(factory, logger, config)
-		if err != nil {
-			if err == configerror.ErrDataTypeIsNotSupported {
-				// Could not create because this exporter does not support this data type.
-				return nil, typeMismatchErr(config, requirement.requiredBy, configmodels.TracesDataType)
-			}
-			return nil, fmt.Errorf("error creating %s exporter: %v", config.Name(), err)
-		}
-
-		// Check if the factory really created the exporter.
-		if te == nil {
-			return nil, fmt.Errorf("factory for %q produced a nil exporter", config.Name())
-		}
-
-		exporter.te = te
+	creationParams := component.ExporterCreateParams{
+		Logger:               logger,
+		ApplicationStartInfo: appInfo,
 	}
 
-	if requirement, ok := inputDataTypes[configmodels.MetricsDataType]; ok {
-		// Metrics data type is required. Create a trace exporter based on config.
-		me, err := createMetricsExporter(factory, logger, config)
-		if err != nil {
-			if err == configerror.ErrDataTypeIsNotSupported {
-				// Could not create because this exporter does not support this data type.
-				return nil, typeMismatchErr(config, requirement.requiredBy, configmodels.MetricsDataType)
+	for dataType, requirement := range inputDataTypes {
+		switch dataType {
+		case configmodels.TracesDataType:
+			// Traces data type is required. Create a trace exporter based on config.
+			te, err := factory.CreateTracesExporter(ctx, creationParams, config)
+			if err != nil {
+				if err == configerror.ErrDataTypeIsNotSupported {
+					// Could not create because this exporter does not support this data type.
+					return nil, exporterTypeMismatchErr(config, requirement.requiredBy, dataType)
+				}
+				return nil, fmt.Errorf("error creating %s exporter: %v", config.Name(), err)
 			}
-			return nil, fmt.Errorf("error creating %s exporter: %v", config.Name(), err)
-		}
 
-		// The factories can be implemented by third parties, check if they really
-		// created the exporter.
-		if me == nil {
-			return nil, fmt.Errorf("factory for %q produced a nil exporter", config.Name())
-		}
+			// Check if the factory really created the exporter.
+			if te == nil {
+				return nil, fmt.Errorf("factory for %q produced a nil exporter", config.Name())
+			}
 
-		exporter.me = me
+			exporter.expByDataType[configmodels.TracesDataType] = te
+
+		case configmodels.MetricsDataType:
+			// Metrics data type is required. Create a trace exporter based on config.
+			me, err := factory.CreateMetricsExporter(ctx, creationParams, config)
+			if err != nil {
+				if err == configerror.ErrDataTypeIsNotSupported {
+					// Could not create because this exporter does not support this data type.
+					return nil, exporterTypeMismatchErr(config, requirement.requiredBy, dataType)
+				}
+				return nil, fmt.Errorf("error creating %s exporter: %v", config.Name(), err)
+			}
+
+			// The factories can be implemented by third parties, check if they really
+			// created the exporter.
+			if me == nil {
+				return nil, fmt.Errorf("factory for %q produced a nil exporter", config.Name())
+			}
+
+			exporter.expByDataType[configmodels.MetricsDataType] = me
+
+		case configmodels.LogsDataType:
+			le, err := factory.CreateLogsExporter(ctx, creationParams, config)
+			if err != nil {
+				if err == configerror.ErrDataTypeIsNotSupported {
+					// Could not create because this exporter does not support this data type.
+					return nil, exporterTypeMismatchErr(config, requirement.requiredBy, dataType)
+				}
+				return nil, fmt.Errorf("error creating %s exporter: %v", config.Name(), err)
+			}
+
+			// Check if the factory really created the exporter.
+			if le == nil {
+				return nil, fmt.Errorf("factory for %q produced a nil exporter", config.Name())
+			}
+
+			exporter.expByDataType[configmodels.LogsDataType] = le
+
+		default:
+			// Could not create because this exporter does not support this data type.
+			return nil, exporterTypeMismatchErr(config, requirement.requiredBy, dataType)
+		}
 	}
 
 	eb.logger.Info("Exporter is enabled.", zap.String("exporter", config.Name()))
@@ -254,52 +308,13 @@ func (eb *ExportersBuilder) buildExporter(
 	return exporter, nil
 }
 
-func typeMismatchErr(
+func exporterTypeMismatchErr(
 	config configmodels.Exporter,
 	requiredByPipeline *configmodels.Pipeline,
 	dataType configmodels.DataType,
 ) error {
-	return fmt.Errorf("%s is a %s pipeline but has a %s which does not support %s",
-		requiredByPipeline.Name, dataType.GetString(),
-		config.Name(), dataType.GetString(),
+	return fmt.Errorf("pipeline %q of data type %q has an exporter %q, which does not support that data type",
+		requiredByPipeline.Name, dataType,
+		config.Name(),
 	)
-}
-
-// createTraceProcessor creates a trace exporter based on provided factory type.
-func createTraceExporter(
-	factoryBase component.ExporterFactoryBase,
-	logger *zap.Logger,
-	cfg configmodels.Exporter,
-) (component.TraceExporterBase, error) {
-	if factory, ok := factoryBase.(component.ExporterFactory); ok {
-		creationParams := component.ExporterCreateParams{Logger: logger}
-		ctx := context.Background()
-
-		// If exporter is of the new type (can manipulate on internal data structure),
-		// use ExporterFactory.CreateTraceExporter.
-		return factory.CreateTraceExporter(ctx, creationParams, cfg)
-	}
-
-	// If exporter is of the old type (can manipulate on OC traces only),
-	// use ExporterFactoryOld.CreateTraceExporter.
-	return factoryBase.(component.ExporterFactoryOld).CreateTraceExporter(logger, cfg)
-}
-
-// createMetricsExporter creates a metrics exporter based on provided factory type.
-func createMetricsExporter(factoryBase component.ExporterFactoryBase,
-	logger *zap.Logger,
-	cfg configmodels.Exporter,
-) (component.MetricsExporterBase, error) {
-	if factory, ok := factoryBase.(component.ExporterFactory); ok {
-		creationParams := component.ExporterCreateParams{Logger: logger}
-		ctx := context.Background()
-
-		// If exporter is of the new type (can manipulate on internal data structure),
-		// use ExporterFactory.CreateMetricsExporter.
-		return factory.CreateMetricsExporter(ctx, creationParams, cfg)
-	}
-
-	// If exporter is of the old type (can manipulate on OC metrics only),
-	// use ExporterFactoryOld.CreateMetricsExporter.
-	return factoryBase.(component.ExporterFactoryOld).CreateMetricsExporter(logger, cfg)
 }

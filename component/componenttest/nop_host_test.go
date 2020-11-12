@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,16 +17,20 @@ package componenttest
 import (
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/collector/component"
 )
 
 func TestNewNopHost(t *testing.T) {
-	got := NewNopHost()
-	if got == nil {
-		t.Fatal("NewNopHost() = nil, want non-nil", got)
-	}
-	_, ok := got.(*NopHost)
-	if !ok {
-		t.Fatal("got.(*NopHost) failed")
-	}
-	got.ReportFatalError(errors.New("TestError"))
+	nh := NewNopHost()
+	require.NotNil(t, nh)
+	require.IsType(t, &NopHost{}, nh)
+
+	nh.ReportFatalError(errors.New("TestError"))
+	assert.Nil(t, nh.GetExporters())
+	assert.Nil(t, nh.GetExtensions())
+	assert.Nil(t, nh.GetFactory(component.KindReceiver, "test"))
 }

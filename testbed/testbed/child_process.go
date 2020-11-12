@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,19 +15,25 @@
 package testbed
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
+	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/process"
+	"go.uber.org/atomic"
 )
 
 // ResourceSpec is a resource consumption specification.
@@ -55,11 +61,19 @@ func (rs *ResourceSpec) isSpecified() bool {
 	return rs != nil && (rs.ExpectedMaxCPU != 0 || rs.ExpectedMaxRAM != 0)
 }
 
-// childProcess is a child process that can be monitored and the output
-// of which will be written to a log file.
-type childProcess struct {
+// ChildProcess implements the OtelcolRunner interface as a child process on the same machine executing
+// the test. The process can be monitored and the output of which will be written to a log file.
+type ChildProcess struct {
+	// Path to agent executable. If unset the default executable in
+	// bin/otelcol_{{.GOOS}}_{{.GOARCH}} will be used.
+	// Can be set for example to use the unstable executable for a specific test.
+	AgentExePath string
+
 	// Descriptive name of the process
 	name string
+
+	// Config file name
+	configFileName string
 
 	// Command to execute
 	cmd *exec.Cmd
@@ -89,10 +103,10 @@ type childProcess struct {
 	lastProcessTimes *cpu.TimesStat
 
 	// Current RAM RSS in MiBs
-	ramMiBCur uint32
+	ramMiBCur atomic.Uint32
 
 	// Current CPU percentage times 1000 (we use scaling since we have to use int for atomic operations).
-	cpuPercentX1000Cur uint32
+	cpuPercentX1000Cur atomic.Uint32
 
 	// Maximum CPU seen
 	cpuPercentMax float64
@@ -107,11 +121,10 @@ type childProcess struct {
 	ramMiBMax uint32
 }
 
-type startParams struct {
-	name         string
-	logFilePath  string
-	cmd          string
-	cmdArgs      []string
+type StartParams struct {
+	Name         string
+	LogFilePath  string
+	CmdArgs      []string
 	resourceSpec *ResourceSpec
 }
 
@@ -122,46 +135,122 @@ type ResourceConsumption struct {
 	RAMMiBMax     uint32
 }
 
+func (cp *ChildProcess) PrepareConfig(configStr string) (configCleanup func(), err error) {
+	configCleanup = func() {
+		// NoOp
+	}
+	var file *os.File
+	file, err = ioutil.TempFile("", "agent*.yaml")
+	if err != nil {
+		log.Printf("%s", err)
+		return configCleanup, err
+	}
+
+	defer func() {
+		errClose := file.Close()
+		if errClose != nil {
+			log.Printf("%s", errClose)
+		}
+	}()
+
+	if _, err = file.WriteString(configStr); err != nil {
+		log.Printf("%s", err)
+		return configCleanup, err
+	}
+	cp.configFileName = file.Name()
+	configCleanup = func() {
+		os.Remove(cp.configFileName)
+	}
+	return configCleanup, err
+}
+
+func expandExeFileName(exeName string) string {
+	cfgTemplate, err := template.New("").Parse(exeName)
+	if err != nil {
+		log.Fatalf("Template failed to parse exe name %q: %s",
+			exeName, err.Error())
+	}
+
+	templateVars := struct {
+		GOOS   string
+		GOARCH string
+	}{
+		GOOS:   runtime.GOOS,
+		GOARCH: runtime.GOARCH,
+	}
+	var buf bytes.Buffer
+	if err = cfgTemplate.Execute(&buf, templateVars); err != nil {
+		log.Fatalf("Configuration template failed to run on exe name %q: %s",
+			exeName, err.Error())
+	}
+
+	return buf.String()
+}
+
 // start a child process.
+//
+// cp.AgentExePath defines the executable to run. If unspecified
+// "../../bin/otelcol_{{.GOOS}}_{{.GOARCH}}" will be used.
+// {{.GOOS}} and {{.GOARCH}} will be expanded to the current OS and ARCH correspondingly.
 //
 // Parameters:
 // name is the human readable name of the process (e.g. "Agent"), used for logging.
 // logFilePath is the file path to write the standard output and standard error of
 // the process to.
-// cmd is the executable to run.
 // cmdArgs is the command line arguments to pass to the process.
-func (cp *childProcess) start(params startParams) error {
+func (cp *ChildProcess) Start(params StartParams) error {
 
-	cp.name = params.name
+	cp.name = params.Name
 	cp.doneSignal = make(chan struct{})
 	cp.resourceSpec = params.resourceSpec
 
-	log.Printf("Starting %s (%s)", cp.name, params.cmd)
+	if cp.AgentExePath == "" {
+		cp.AgentExePath = GlobalConfig.DefaultAgentExeRelativeFile
+	}
+	exePath := expandExeFileName(cp.AgentExePath)
+	exePath, err := filepath.Abs(exePath)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Starting %s (%s)", cp.name, exePath)
 
 	// Prepare log file
-	logFile, err := os.Create(params.logFilePath)
+	logFile, err := os.Create(params.LogFilePath)
 	if err != nil {
-		return fmt.Errorf("cannot create %s: %s", params.logFilePath, err.Error())
+		return fmt.Errorf("cannot create %s: %s", params.LogFilePath, err.Error())
 	}
-	log.Printf("Writing %s log to %s", cp.name, params.logFilePath)
+	log.Printf("Writing %s log to %s", cp.name, params.LogFilePath)
 
 	// Prepare to start the process.
 	// #nosec
-	cp.cmd = exec.Command(params.cmd, params.cmdArgs...)
+	args := params.CmdArgs
+	if !containsConfig(args) {
+		if cp.configFileName == "" {
+			configFile := path.Join("testdata", "agent-config.yaml")
+			cp.configFileName, err = filepath.Abs(configFile)
+			if err != nil {
+				return err
+			}
+		}
+		args = append(args, "--config")
+		args = append(args, cp.configFileName)
+	}
+	cp.cmd = exec.Command(exePath, args...)
 
 	// Capture standard output and standard error.
 	stdoutIn, err := cp.cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("cannot capture stdout of %s: %s", params.cmd, err.Error())
+		return fmt.Errorf("cannot capture stdout of %s: %s", exePath, err.Error())
 	}
 	stderrIn, err := cp.cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("cannot capture stderr of %s: %s", params.cmd, err.Error())
+		return fmt.Errorf("cannot capture stderr of %s: %s", exePath, err.Error())
 	}
 
 	// Start the process.
-	if err := cp.cmd.Start(); err != nil {
-		return fmt.Errorf("cannot start executable at %s: %s", params.cmd, err.Error())
+	if err = cp.cmd.Start(); err != nil {
+		return fmt.Errorf("cannot start executable at %s: %s", exePath, err.Error())
 	}
 
 	cp.startTime = time.Now()
@@ -182,10 +271,13 @@ func (cp *childProcess) start(params startParams) error {
 		cp.outputWG.Done()
 	}()
 
-	return nil
+	return err
 }
 
-func (cp *childProcess) stop() {
+func (cp *ChildProcess) Stop() (stopped bool, err error) {
+	if !cp.isStarted || cp.isStopped {
+		return false, nil
+	}
 	cp.stopOnce.Do(func() {
 
 		if !cp.isStarted {
@@ -201,7 +293,7 @@ func (cp *childProcess) stop() {
 		close(cp.doneSignal)
 
 		// Gracefully signal process to stop.
-		if err := cp.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		if err = cp.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			log.Printf("Cannot send SIGTEM: %s", err.Error())
 		}
 
@@ -217,7 +309,7 @@ func (cp *childProcess) stop() {
 				// Time is out. Kill the process.
 				log.Printf("%s pid=%d is not responding to SIGTERM. Sending SIGKILL to kill forcedly.",
 					cp.name, cp.cmd.Process.Pid)
-				if err := cp.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+				if err = cp.cmd.Process.Signal(syscall.SIGKILL); err != nil {
 					log.Printf("Cannot send SIGKILL: %s", err.Error())
 				}
 			case <-finished:
@@ -229,14 +321,14 @@ func (cp *childProcess) stop() {
 		cp.outputWG.Wait()
 
 		// Wait for process to terminate
-		err := cp.cmd.Wait()
+		err = cp.cmd.Wait()
 
 		// Let goroutine know process is finished.
 		close(finished)
 
 		// Set resource consumption stats to 0
-		atomic.StoreUint32(&cp.ramMiBCur, 0)
-		atomic.StoreUint32(&cp.cpuPercentX1000Cur, 0)
+		cp.ramMiBCur.Store(0)
+		cp.cpuPercentX1000Cur.Store(0)
 
 		log.Printf("%s process stopped, exit code=%d", cp.name, cp.cmd.ProcessState.ExitCode())
 
@@ -244,9 +336,11 @@ func (cp *childProcess) stop() {
 			log.Printf("%s execution failed: %s", cp.name, err.Error())
 		}
 	})
+	stopped = true
+	return stopped, err
 }
 
-func (cp *childProcess) watchResourceConsumption() error {
+func (cp *ChildProcess) WatchResourceConsumption() error {
 	if !cp.resourceSpec.isSpecified() {
 		// Resource monitoring is not enabled.
 		return nil
@@ -280,7 +374,7 @@ func (cp *childProcess) watchResourceConsumption() error {
 			cp.fetchCPUUsage()
 
 			if err := cp.checkAllowedResourceUsage(); err != nil {
-				cp.stop()
+				cp.Stop()
 				return err
 			}
 
@@ -291,7 +385,11 @@ func (cp *childProcess) watchResourceConsumption() error {
 	}
 }
 
-func (cp *childProcess) fetchRAMUsage() {
+func (cp *ChildProcess) GetProcessMon() *process.Process {
+	return cp.processMon
+}
+
+func (cp *ChildProcess) fetchRAMUsage() {
 	// Get process memory and CPU times
 	mi, err := cp.processMon.MemoryInfo()
 	if err != nil {
@@ -311,10 +409,10 @@ func (cp *childProcess) fetchRAMUsage() {
 	}
 
 	// Store current usage.
-	atomic.StoreUint32(&cp.ramMiBCur, ramMiBCur)
+	cp.ramMiBCur.Store(ramMiBCur)
 }
 
-func (cp *childProcess) fetchCPUUsage() {
+func (cp *ChildProcess) fetchCPUUsage() {
 	times, err := cp.processMon.Times()
 	if err != nil {
 		log.Printf("cannot get process times for %d: %s",
@@ -340,21 +438,21 @@ func (cp *childProcess) fetchCPUUsage() {
 	curCPUPercentageX1000 := uint32(cpuPercent * 1000)
 
 	// Store current usage.
-	atomic.StoreUint32(&cp.cpuPercentX1000Cur, curCPUPercentageX1000)
+	cp.cpuPercentX1000Cur.Store(curCPUPercentageX1000)
 }
 
-func (cp *childProcess) checkAllowedResourceUsage() error {
+func (cp *ChildProcess) checkAllowedResourceUsage() error {
 	// Check if current CPU usage exceeds expected.
 	var errMsg string
-	if cp.resourceSpec.ExpectedMaxCPU != 0 && cp.cpuPercentX1000Cur/1000 > cp.resourceSpec.ExpectedMaxCPU {
+	if cp.resourceSpec.ExpectedMaxCPU != 0 && cp.cpuPercentX1000Cur.Load()/1000 > cp.resourceSpec.ExpectedMaxCPU {
 		errMsg = fmt.Sprintf("CPU consumption is %.1f%%, max expected is %d%%",
-			float64(cp.cpuPercentX1000Cur)/1000.0, cp.resourceSpec.ExpectedMaxCPU)
+			float64(cp.cpuPercentX1000Cur.Load())/1000.0, cp.resourceSpec.ExpectedMaxCPU)
 	}
 
 	// Check if current RAM usage exceeds expected.
-	if cp.resourceSpec.ExpectedMaxRAM != 0 && cp.ramMiBCur > cp.resourceSpec.ExpectedMaxRAM {
-		errMsg = fmt.Sprintf("RAM consumption is %d MiB, max expected is %d MiB",
-			cp.ramMiBCur, cp.resourceSpec.ExpectedMaxRAM)
+	if cp.resourceSpec.ExpectedMaxRAM != 0 && cp.ramMiBCur.Load() > cp.resourceSpec.ExpectedMaxRAM {
+		errMsg = fmt.Sprintf("RAM consumption is %s MiB, max expected is %d MiB",
+			cp.ramMiBCur.String(), cp.resourceSpec.ExpectedMaxRAM)
 	}
 
 	if errMsg == "" {
@@ -367,21 +465,21 @@ func (cp *childProcess) checkAllowedResourceUsage() error {
 }
 
 // GetResourceConsumption returns resource consumption as a string
-func (cp *childProcess) GetResourceConsumption() string {
+func (cp *ChildProcess) GetResourceConsumption() string {
 	if !cp.resourceSpec.isSpecified() {
 		// Monitoring is not enabled.
 		return ""
 	}
 
-	curRSSMib := atomic.LoadUint32(&cp.ramMiBCur)
-	curCPUPercentageX1000 := atomic.LoadUint32(&cp.cpuPercentX1000Cur)
+	curRSSMib := cp.ramMiBCur.Load()
+	curCPUPercentageX1000 := cp.cpuPercentX1000Cur.Load()
 
 	return fmt.Sprintf("%s RAM (RES):%4d MiB, CPU:%4.1f%%", cp.name,
 		curRSSMib, float64(curCPUPercentageX1000)/1000.0)
 }
 
 // GetTotalConsumption returns total resource consumption since start of process
-func (cp *childProcess) GetTotalConsumption() *ResourceConsumption {
+func (cp *ChildProcess) GetTotalConsumption() *ResourceConsumption {
 	rc := &ResourceConsumption{}
 
 	if cp.processMon != nil {
@@ -402,4 +500,13 @@ func (cp *childProcess) GetTotalConsumption() *ResourceConsumption {
 	}
 
 	return rc
+}
+
+func containsConfig(s []string) bool {
+	for _, a := range s {
+		if a == "--config" {
+			return true
+		}
+	}
+	return false
 }

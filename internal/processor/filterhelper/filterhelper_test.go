@@ -1,10 +1,10 @@
-// Copyright 2020, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
+	"go.opentelemetry.io/collector/consumer/pdata"
 )
 
 func TestHelper_AttributeValue(t *testing.T) {
@@ -55,9 +55,9 @@ func TestHelper_AttributeValue(t *testing.T) {
 	assert.Equal(t, pdata.NewAttributeValueString("bob the builder"), val)
 	assert.NoError(t, err)
 
-	val, err = NewAttributeValueRaw(nil)
+	_, err = NewAttributeValueRaw(nil)
 	assert.Error(t, err)
 
-	val, err = NewAttributeValueRaw(t)
+	_, err = NewAttributeValueRaw(t)
 	assert.Error(t, err)
 }

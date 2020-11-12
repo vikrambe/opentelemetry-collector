@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,29 +20,28 @@ import (
 	"time"
 
 	"github.com/prometheus/prometheus/discovery"
-	sd_config "github.com/prometheus/prometheus/discovery/config"
 	"github.com/prometheus/prometheus/scrape"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/consumer"
-	"github.com/open-telemetry/opentelemetry-collector/obsreport"
-	"github.com/open-telemetry/opentelemetry-collector/receiver/prometheusreceiver/internal"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/obsreport"
+	"go.opentelemetry.io/collector/receiver/prometheusreceiver/internal"
 )
 
-// Preceiver is the type that provides Prometheus scraper/receiver functionality.
-type Preceiver struct {
+// pReceiver is the type that provides Prometheus scraper/receiver functionality.
+type pReceiver struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 	cfg       *Config
-	consumer  consumer.MetricsConsumerOld
+	consumer  consumer.MetricsConsumer
 	cancel    context.CancelFunc
 	logger    *zap.Logger
 }
 
 // New creates a new prometheus.Receiver reference.
-func newPrometheusReceiver(logger *zap.Logger, cfg *Config, next consumer.MetricsConsumerOld) *Preceiver {
-	pr := &Preceiver{
+func newPrometheusReceiver(logger *zap.Logger, cfg *Config, next consumer.MetricsConsumer) *pReceiver {
+	pr := &pReceiver{
 		cfg:      cfg,
 		consumer: next,
 		logger:   logger,
@@ -52,17 +51,17 @@ func newPrometheusReceiver(logger *zap.Logger, cfg *Config, next consumer.Metric
 
 // Start is the method that starts Prometheus scraping and it
 // is controlled by having previously defined a Configuration using perhaps New.
-func (pr *Preceiver) Start(ctx context.Context, host component.Host) error {
+func (pr *pReceiver) Start(_ context.Context, host component.Host) error {
 	pr.startOnce.Do(func() {
 		ctx := context.Background()
 		c, cancel := context.WithCancel(ctx)
 		pr.cancel = cancel
-		c = obsreport.ReceiverContext(c, pr.cfg.Name(), "http", pr.cfg.Name())
+		c = obsreport.ReceiverContext(c, pr.cfg.Name(), "http")
 		var jobsMap *internal.JobsMap
 		if !pr.cfg.UseStartTimeMetric {
-			jobsMap = internal.NewJobsMap(time.Duration(2 * time.Minute))
+			jobsMap = internal.NewJobsMap(2 * time.Minute)
 		}
-		app := internal.NewOcaStore(c, pr.consumer, pr.logger, jobsMap, pr.cfg.UseStartTimeMetric, pr.cfg.Name())
+		app := internal.NewOcaStore(c, pr.consumer, pr.logger, jobsMap, pr.cfg.UseStartTimeMetric, pr.cfg.StartTimeMetricRegex, pr.cfg.Name())
 		// need to use a logger with the gokitLog interface
 		l := internal.NewZapToGokitLogAdapter(pr.logger)
 		scrapeManager := scrape.NewManager(l, app)
@@ -93,9 +92,9 @@ func (pr *Preceiver) Start(ctx context.Context, host component.Host) error {
 		// By this point we've given time to the scrape manager
 		// to start applying its original configuration.
 
-		discoveryCfg := make(map[string]sd_config.ServiceDiscoveryConfig)
+		discoveryCfg := make(map[string]discovery.Configs)
 		for _, scrapeConfig := range pr.cfg.PrometheusConfig.ScrapeConfigs {
-			discoveryCfg[scrapeConfig.JobName] = scrapeConfig.ServiceDiscoveryConfig
+			discoveryCfg[scrapeConfig.JobName] = scrapeConfig.ServiceDiscoveryConfigs
 		}
 
 		// Now trigger the discovery notification to the scrape manager.
@@ -106,15 +105,8 @@ func (pr *Preceiver) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
-// Flush triggers the Flush method on the underlying Prometheus scrapers and instructs
-// them to immediately sned over the metrics they've collected, to the MetricsConsumer.
-// it's not needed on the new prometheus receiver implementation, let it do nothing
-func (pr *Preceiver) Flush() {
-
-}
-
 // Shutdown stops and cancels the underlying Prometheus scrapers.
-func (pr *Preceiver) Shutdown(context.Context) error {
+func (pr *pReceiver) Shutdown(context.Context) error {
 	pr.stopOnce.Do(pr.cancel)
 	return nil
 }

@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +20,7 @@ package memorylimiter
 import (
 	"time"
 
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 // Config defines configuration for memory memoryLimiter processor.
@@ -43,6 +43,13 @@ type Config struct {
 	// BallastSizeMiB is the size, in MiB, of the ballast size being used by the
 	// process.
 	BallastSizeMiB uint32 `mapstructure:"ballast_size_mib"`
+
+	// MemoryLimitPercentage is the maximum amount of memory, in %, targeted to be
+	// allocated by the process. The fixed memory settings MemoryLimitMiB has a higher precedence.
+	MemoryLimitPercentage uint32 `mapstructure:"limit_percentage"`
+	// MemorySpikePercentage is the maximum, in percents against the total memory,
+	// spike expected between the measurements of memory usage.
+	MemorySpikePercentage uint32 `mapstructure:"spike_limit_percentage"`
 }
 
 // Name of BallastSizeMiB config option.

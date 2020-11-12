@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,8 +15,8 @@
 package componenttest
 
 import (
-	"github.com/open-telemetry/opentelemetry-collector/component"
-	"github.com/open-telemetry/opentelemetry-collector/config/configmodels"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmodels"
 )
 
 // NopHost mocks a receiver.ReceiverHost for test purposes.
@@ -39,10 +39,14 @@ func (nh *NopHost) ReportFatalError(_ error) {
 }
 
 // GetFactory of the specified kind. Returns the factory for a component type.
-func (nh *NopHost) GetFactory(_ component.Kind, _ string) component.Factory {
+func (nh *NopHost) GetFactory(_ component.Kind, _ configmodels.Type) component.Factory {
 	return nil
 }
 
 func (nh *NopHost) GetExtensions() map[configmodels.Extension]component.ServiceExtension {
+	return nil
+}
+
+func (nh *NopHost) GetExporters() map[configmodels.DataType]map[configmodels.Exporter]component.Exporter {
 	return nil
 }

@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,7 +23,7 @@ import (
 	"github.com/jaegertracing/jaeger/pkg/healthcheck"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector/component"
+	"go.opentelemetry.io/collector/component"
 )
 
 type healthCheckExtension struct {
@@ -33,9 +33,9 @@ type healthCheckExtension struct {
 	server http.Server
 }
 
-var _ (component.PipelineWatcher) = (*healthCheckExtension)(nil)
+var _ component.PipelineWatcher = (*healthCheckExtension)(nil)
 
-func (hc *healthCheckExtension) Start(ctx context.Context, host component.Host) error {
+func (hc *healthCheckExtension) Start(_ context.Context, host component.Host) error {
 
 	hc.logger.Info("Starting health_check extension", zap.Any("config", hc.config))
 
@@ -74,7 +74,7 @@ func (hc *healthCheckExtension) NotReady() error {
 	return nil
 }
 
-func newServer(config Config, logger *zap.Logger) (*healthCheckExtension, error) {
+func newServer(config Config, logger *zap.Logger) *healthCheckExtension {
 	hc := &healthCheckExtension{
 		config: config,
 		logger: logger,
@@ -84,5 +84,5 @@ func newServer(config Config, logger *zap.Logger) (*healthCheckExtension, error)
 
 	hc.state.SetLogger(logger)
 
-	return hc, nil
+	return hc
 }

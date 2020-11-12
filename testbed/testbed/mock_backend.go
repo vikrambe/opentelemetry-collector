@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +16,15 @@ package testbed
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
+	"time"
 
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdata"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/pdatautil"
+	"go.uber.org/atomic"
+
+	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/pdata"
 )
 
 // MockBackend is a backend that allows receiving the data locally.
@@ -32,6 +32,7 @@ type MockBackend struct {
 	// Metric and trace consumers
 	tc *MockTraceConsumer
 	mc *MockMetricConsumer
+	lc *MockLogConsumer
 
 	receiver DataReceiver
 
@@ -42,14 +43,14 @@ type MockBackend struct {
 	// Start/stop flags
 	isStarted bool
 	stopOnce  sync.Once
+	startedAt time.Time
 
 	// Recording fields.
-	isRecording        bool
-	recordMutex        sync.Mutex
-	ReceivedTraces     []pdata.Traces
-	ReceivedMetrics    []pdata.Metrics
-	ReceivedTracesOld  []consumerdata.TraceData
-	ReceivedMetricsOld []consumerdata.MetricsData
+	isRecording     bool
+	recordMutex     sync.Mutex
+	ReceivedTraces  []pdata.Traces
+	ReceivedMetrics []pdata.Metrics
+	ReceivedLogs    []pdata.Logs
 }
 
 // NewMockBackend creates a new mock backend that receives data using specified receiver.
@@ -59,9 +60,11 @@ func NewMockBackend(logFilePath string, receiver DataReceiver) *MockBackend {
 		receiver:    receiver,
 		tc:          &MockTraceConsumer{},
 		mc:          &MockMetricConsumer{},
+		lc:          &MockLogConsumer{},
 	}
 	mb.tc.backend = mb
 	mb.mc.backend = mb
+	mb.lc.backend = mb
 	return mb
 }
 
@@ -81,12 +84,13 @@ func (mb *MockBackend) Start() error {
 		return err
 	}
 
-	err = mb.receiver.Start(mb.tc, mb.mc)
+	err = mb.receiver.Start(mb.tc, mb.mc, mb.lc)
 	if err != nil {
 		return err
 	}
 
 	mb.isStarted = true
+	mb.startedAt = time.Now()
 	return nil
 }
 
@@ -115,12 +119,13 @@ func (mb *MockBackend) EnableRecording() {
 }
 
 func (mb *MockBackend) GetStats() string {
-	return fmt.Sprintf("Received:%5d items", mb.DataItemsReceived())
+	received := mb.DataItemsReceived()
+	return printer.Sprintf("Received:%10d items (%d/sec)", received, int(float64(received)/time.Since(mb.startedAt).Seconds()))
 }
 
 // DataItemsReceived returns total number of received spans and metrics.
 func (mb *MockBackend) DataItemsReceived() uint64 {
-	return atomic.LoadUint64(&mb.tc.spansReceived) + atomic.LoadUint64(&mb.mc.metricsReceived)
+	return mb.tc.numSpansReceived.Load() + mb.mc.numMetricsReceived.Load() + mb.lc.numLogRecordsReceived.Load()
 }
 
 // ClearReceivedItems clears the list of received traces and metrics. Note: counters
@@ -130,8 +135,7 @@ func (mb *MockBackend) ClearReceivedItems() {
 	defer mb.recordMutex.Unlock()
 	mb.ReceivedTraces = nil
 	mb.ReceivedMetrics = nil
-	mb.ReceivedTracesOld = nil
-	mb.ReceivedMetricsOld = nil
+	mb.ReceivedLogs = nil
 }
 
 func (mb *MockBackend) ConsumeTrace(td pdata.Traces) {
@@ -139,15 +143,6 @@ func (mb *MockBackend) ConsumeTrace(td pdata.Traces) {
 	defer mb.recordMutex.Unlock()
 	if mb.isRecording {
 		mb.ReceivedTraces = append(mb.ReceivedTraces, td)
-	}
-}
-
-// ConsumeTraceOld consumes trace data in old representation
-func (mb *MockBackend) ConsumeTraceOld(td consumerdata.TraceData) {
-	mb.recordMutex.Lock()
-	defer mb.recordMutex.Unlock()
-	if mb.isRecording {
-		mb.ReceivedTracesOld = append(mb.ReceivedTracesOld, td)
 	}
 }
 
@@ -159,22 +154,23 @@ func (mb *MockBackend) ConsumeMetric(md pdata.Metrics) {
 	}
 }
 
-// ConsumeMetricOld consumes metric data in old representation
-func (mb *MockBackend) ConsumeMetricOld(md consumerdata.MetricsData) {
+var _ consumer.TracesConsumer = (*MockTraceConsumer)(nil)
+
+func (mb *MockBackend) ConsumeLogs(ld pdata.Logs) {
 	mb.recordMutex.Lock()
 	defer mb.recordMutex.Unlock()
 	if mb.isRecording {
-		mb.ReceivedMetricsOld = append(mb.ReceivedMetricsOld, md)
+		mb.ReceivedLogs = append(mb.ReceivedLogs, ld)
 	}
 }
 
 type MockTraceConsumer struct {
-	spansReceived uint64
-	backend       *MockBackend
+	numSpansReceived atomic.Uint64
+	backend          *MockBackend
 }
 
-func (tc *MockTraceConsumer) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
-	atomic.AddUint64(&tc.spansReceived, uint64(td.SpanCount()))
+func (tc *MockTraceConsumer) ConsumeTraces(_ context.Context, td pdata.Traces) error {
+	tc.numSpansReceived.Add(uint64(td.SpanCount()))
 
 	rs := td.ResourceSpans()
 	for i := 0; i < rs.Len(); i++ {
@@ -209,59 +205,38 @@ func (tc *MockTraceConsumer) ConsumeTraces(ctx context.Context, td pdata.Traces)
 	return nil
 }
 
-func (tc *MockTraceConsumer) ConsumeTraceData(ctx context.Context, td consumerdata.TraceData) error {
-	atomic.AddUint64(&tc.spansReceived, uint64(len(td.Spans)))
-
-	for _, span := range td.Spans {
-		var spanSeqnum int64
-		var traceSeqnum int64
-
-		if span.Attributes != nil {
-			seqnumAttr, ok := span.Attributes.AttributeMap["load_generator.span_seq_num"]
-			if ok {
-				spanSeqnum = seqnumAttr.GetIntValue()
-			}
-
-			seqnumAttr, ok = span.Attributes.AttributeMap["load_generator.trace_seq_num"]
-			if ok {
-				traceSeqnum = seqnumAttr.GetIntValue()
-			}
-
-			// Ignore the seqnums for now. We will use them later.
-			_ = spanSeqnum
-			_ = traceSeqnum
-		}
-
-	}
-
-	tc.backend.ConsumeTraceOld(td)
-
-	return nil
-}
+var _ consumer.MetricsConsumer = (*MockMetricConsumer)(nil)
 
 type MockMetricConsumer struct {
-	metricsReceived uint64
-	backend         *MockBackend
+	numMetricsReceived atomic.Uint64
+	backend            *MockBackend
 }
 
 func (mc *MockMetricConsumer) ConsumeMetrics(_ context.Context, md pdata.Metrics) error {
-	_, dataPoints := pdatautil.MetricAndDataPointCount(md)
-	atomic.AddUint64(&mc.metricsReceived, uint64(dataPoints))
+	_, dataPoints := md.MetricAndDataPointCount()
+	mc.numMetricsReceived.Add(uint64(dataPoints))
 	mc.backend.ConsumeMetric(md)
 	return nil
 }
 
-func (mc *MockMetricConsumer) ConsumeMetricsData(ctx context.Context, md consumerdata.MetricsData) error {
-	dataPoints := 0
-	for _, metric := range md.Metrics {
-		for _, ts := range metric.Timeseries {
-			dataPoints += len(ts.Points)
-		}
-	}
+func (tc *MockTraceConsumer) MockConsumeTraceData(spansCount int) error {
+	tc.numSpansReceived.Add(uint64(spansCount))
+	return nil
+}
 
-	atomic.AddUint64(&mc.metricsReceived, uint64(dataPoints))
+func (mc *MockMetricConsumer) MockConsumeMetricData(metricsCount int) error {
+	mc.numMetricsReceived.Add(uint64(metricsCount))
+	return nil
+}
 
-	mc.backend.ConsumeMetricOld(md)
+type MockLogConsumer struct {
+	numLogRecordsReceived atomic.Uint64
+	backend               *MockBackend
+}
 
+func (mc *MockLogConsumer) ConsumeLogs(_ context.Context, ld pdata.Logs) error {
+	recordCount := ld.LogRecordCount()
+	mc.numLogRecordsReceived.Add(uint64(recordCount))
+	mc.backend.ConsumeLogs(ld)
 	return nil
 }

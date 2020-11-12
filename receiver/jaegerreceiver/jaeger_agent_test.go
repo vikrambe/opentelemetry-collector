@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,72 +20,73 @@ import (
 	"net"
 	"net/http"
 	"testing"
-	"time"
 
-	"contrib.go.opencensus.io/exporter/jaeger"
-	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
-	tracepb "github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1"
+	"github.com/apache/thrift/lib/go/thrift"
+	"github.com/jaegertracing/jaeger/cmd/agent/app/servers/thriftudp"
+	"github.com/jaegertracing/jaeger/model"
+	jaegerconvert "github.com/jaegertracing/jaeger/model/converter/thrift/jaeger"
 	"github.com/jaegertracing/jaeger/proto-gen/api_v2"
+	"github.com/jaegertracing/jaeger/thrift-gen/agent"
+	jaegerthrift "github.com/jaegertracing/jaeger/thrift-gen/jaeger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opencensus.io/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/open-telemetry/opentelemetry-collector/component/componenttest"
-	"github.com/open-telemetry/opentelemetry-collector/consumer/consumerdata"
-	"github.com/open-telemetry/opentelemetry-collector/exporter/exportertest"
-	"github.com/open-telemetry/opentelemetry-collector/internal"
-	"github.com/open-telemetry/opentelemetry-collector/testutils"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configgrpc"
+	"go.opentelemetry.io/collector/config/configtls"
+	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/consumer/pdata"
+	"go.opentelemetry.io/collector/testutil"
+	"go.opentelemetry.io/collector/translator/conventions"
+	"go.opentelemetry.io/collector/translator/trace/jaeger"
 )
 
 const jaegerAgent = "jaeger_agent_test"
 
-func TestJaegerAgentUDP_ThriftCompact_6831(t *testing.T) {
-	port := 6831
+func TestJaegerAgentUDP_ThriftCompact(t *testing.T) {
+	port := testutil.GetAvailablePort(t)
 	addrForClient := fmt.Sprintf(":%d", port)
-	testJaegerAgent(t, addrForClient, &Configuration{
-		AgentCompactThriftPort: port,
+	testJaegerAgent(t, addrForClient, &configuration{
+		AgentCompactThriftPort: int(port),
 	})
 }
 
 func TestJaegerAgentUDP_ThriftCompact_InvalidPort(t *testing.T) {
 	port := 999999
 
-	config := &Configuration{
-		AgentCompactThriftPort: int(port),
+	config := &configuration{
+		AgentCompactThriftPort: port,
 	}
-	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
-	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	jr := newJaegerReceiver(jaegerAgent, config, nil, params)
 
-	err = jr.Start(context.Background(), componenttest.NewNopHost())
-	assert.Error(t, err, "should not have been able to startTraceReception")
+	assert.Error(t, jr.Start(context.Background(), componenttest.NewNopHost()), "should not have been able to startTraceReception")
 
 	jr.Shutdown(context.Background())
 }
 
-func TestJaegerAgentUDP_ThriftBinary_6832(t *testing.T) {
-	t.Skipf("Unfortunately due to Jaeger internal versioning, OpenCensus-Go's Thrift seems to conflict with ours")
-
-	port := 6832
+func TestJaegerAgentUDP_ThriftBinary(t *testing.T) {
+	port := testutil.GetAvailablePort(t)
 	addrForClient := fmt.Sprintf(":%d", port)
-	testJaegerAgent(t, addrForClient, &Configuration{
-		AgentBinaryThriftPort: port,
+	testJaegerAgent(t, addrForClient, &configuration{
+		AgentBinaryThriftPort: int(port),
 	})
 }
 
 func TestJaegerAgentUDP_ThriftBinary_PortInUse(t *testing.T) {
 	// This test confirms that the thrift binary port is opened correctly.  This is all we can test at the moment.  See above.
-	port := testutils.GetAvailablePort(t)
+	port := testutil.GetAvailablePort(t)
 
-	config := &Configuration{
+	config := &configuration{
 		AgentBinaryThriftPort: int(port),
 	}
-	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
-	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	jr := newJaegerReceiver(jaegerAgent, config, nil, params)
 
-	err = jr.(*jReceiver).startAgent(componenttest.NewNopHost())
-	assert.NoError(t, err, "Start failed")
+	assert.NoError(t, jr.startAgent(componenttest.NewNopHost()), "Start failed")
 	defer jr.Shutdown(context.Background())
 
 	l, err := net.Listen("udp", fmt.Sprintf("localhost:%d", port))
@@ -99,20 +100,19 @@ func TestJaegerAgentUDP_ThriftBinary_PortInUse(t *testing.T) {
 func TestJaegerAgentUDP_ThriftBinary_InvalidPort(t *testing.T) {
 	port := 999999
 
-	config := &Configuration{
-		AgentBinaryThriftPort: int(port),
+	config := &configuration{
+		AgentBinaryThriftPort: port,
 	}
-	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
-	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	jr := newJaegerReceiver(jaegerAgent, config, nil, params)
 
-	err = jr.Start(context.Background(), componenttest.NewNopHost())
-	assert.Error(t, err, "should not have been able to startTraceReception")
+	assert.Error(t, jr.Start(context.Background(), componenttest.NewNopHost()), "should not have been able to startTraceReception")
 
 	jr.Shutdown(context.Background())
 }
 
-func initializeGRPCTestServer(t *testing.T, beforeServe func(server *grpc.Server)) (*grpc.Server, net.Addr) {
-	server := grpc.NewServer()
+func initializeGRPCTestServer(t *testing.T, beforeServe func(server *grpc.Server), opts ...grpc.ServerOption) (*grpc.Server, net.Addr) {
+	server := grpc.NewServer(opts...)
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 	beforeServe(server)
@@ -136,21 +136,24 @@ func TestJaegerHTTP(t *testing.T) {
 	})
 	defer s.GracefulStop()
 
-	port := testutils.GetAvailablePort(t)
-	config := &Configuration{
-		AgentHTTPPort:          int(port),
-		RemoteSamplingEndpoint: addr.String(),
+	port := testutil.GetAvailablePort(t)
+	config := &configuration{
+		AgentHTTPPort: int(port),
+		RemoteSamplingClientSettings: configgrpc.GRPCClientSettings{
+			Endpoint: addr.String(),
+			TLSSetting: configtls.TLSClientSetting{
+				Insecure: true,
+			},
+		},
 	}
-	jr, err := New(jaegerAgent, config, nil, zap.NewNop())
-	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	jr := newJaegerReceiver(jaegerAgent, config, nil, params)
 	defer jr.Shutdown(context.Background())
 
-	err = jr.Start(context.Background(), componenttest.NewNopHost())
-	assert.NoError(t, err, "Start failed")
+	assert.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()), "Start failed")
 
 	// allow http server to start
-	err = testutils.WaitForPort(t, port)
-	assert.NoError(t, err, "WaitForPort failed")
+	assert.NoError(t, testutil.WaitForPort(t, port), "WaitForPort failed")
 
 	testURL := fmt.Sprintf("http://localhost:%d/sampling?service=test", port)
 	resp, err := http.Get(testURL)
@@ -174,173 +177,77 @@ func TestJaegerHTTP(t *testing.T) {
 	}
 }
 
-func testJaegerAgent(t *testing.T, agentEndpoint string, receiverConfig *Configuration) {
+func testJaegerAgent(t *testing.T, agentEndpoint string, receiverConfig *configuration) {
 	// 1. Create the Jaeger receiver aka "server"
-	sink := new(exportertest.SinkTraceExporterOld)
-	jr, err := New(jaegerAgent, receiverConfig, sink, zap.NewNop())
-	assert.NoError(t, err, "Failed to create new Jaeger Receiver")
+	sink := new(consumertest.TracesSink)
+	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
+	jr := newJaegerReceiver(jaegerAgent, receiverConfig, sink, params)
 	defer jr.Shutdown(context.Background())
 
-	err = jr.Start(context.Background(), componenttest.NewNopHost())
-	assert.NoError(t, err, "Start failed")
+	assert.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()), "Start failed")
 
-	now := time.Unix(1542158650, 536343000).UTC()
-	nowPlus10min := now.Add(10 * time.Minute)
-	nowPlus10min2sec := now.Add(10 * time.Minute).Add(2 * time.Second)
-
-	// 2. Then with a "live application", send spans to the Jaeger exporter.
-	jexp, err := jaeger.NewExporter(jaeger.Options{
-		AgentEndpoint: agentEndpoint,
-		ServiceName:   "TestingAgentUDP",
-		Process: jaeger.Process{
-			ServiceName: "issaTest",
-			Tags: []jaeger.Tag{
-				jaeger.BoolTag("bool", true),
-				jaeger.StringTag("string", "yes"),
-				jaeger.Int64Tag("int64", 1e7),
-			},
-		},
-	})
+	// 2. Then send spans to the Jaeger receiver.
+	jexp, err := newClientUDP(agentEndpoint, jr.agentBinaryThriftEnabled())
 	assert.NoError(t, err, "Failed to create the Jaeger OpenCensus exporter for the live application")
 
 	// 3. Now finally send some spans
-	spandata := []*trace.SpanData{
-		{
-			SpanContext: trace.SpanContext{
-				TraceID: trace.TraceID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x80},
-				SpanID:  trace.SpanID{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8},
-			},
-			ParentSpanID: trace.SpanID{0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18},
-			Name:         "DBSearch",
-			StartTime:    now,
-			EndTime:      nowPlus10min,
-			Status: trace.Status{
-				Code:    trace.StatusCodeNotFound,
-				Message: "Stale indices",
-			},
-			Links: []trace.Link{
-				{
-					TraceID: trace.TraceID{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-					SpanID:  trace.SpanID{0xCF, 0xCE, 0xCD, 0xCC, 0xCB, 0xCA, 0xC9, 0xC8},
-					Type:    trace.LinkTypeParent,
-				},
-			},
-		},
-		{
-			SpanContext: trace.SpanContext{
-				TraceID: trace.TraceID{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-				SpanID:  trace.SpanID{0xCF, 0xCE, 0xCD, 0xCC, 0xCB, 0xCA, 0xC9, 0xC8},
-			},
-			Name:      "ProxyFetch",
-			StartTime: nowPlus10min,
-			EndTime:   nowPlus10min2sec,
-			Status: trace.Status{
-				Code:    trace.StatusCodeInternal,
-				Message: "Frontend crash",
-			},
-			Links: []trace.Link{
-				{
-					TraceID: trace.TraceID{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-					SpanID:  trace.SpanID{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8},
-					Type:    trace.LinkTypeChild,
-				},
-			},
-		},
+	td := generateTraceData()
+	batches, err := jaeger.InternalTracesToJaegerProto(td)
+	require.NoError(t, err)
+	for _, batch := range batches {
+		require.NoError(t, jexp.EmitBatch(context.Background(), modelToThrift(batch)))
 	}
 
-	for _, sd := range spandata {
-		jexp.ExportSpan(sd)
+	testutil.WaitFor(t, func() bool {
+		return sink.SpansCount() > 0
+	})
+
+	gotTraces := sink.AllTraces()
+	require.Equal(t, 1, len(gotTraces))
+	assert.EqualValues(t, td, gotTraces[0])
+}
+
+func newClientUDP(hostPort string, binary bool) (*agent.AgentClient, error) {
+	clientTransport, err := thriftudp.NewTUDPClientTransport(hostPort, "")
+	if err != nil {
+		return nil, err
 	}
-	jexp.Flush()
-
-	// Simulate and account for network latency but also the reception process on the server.
-	<-time.After(500 * time.Millisecond)
-
-	for i := 0; i < 10; i++ {
-		jexp.Flush()
-		<-time.After(60 * time.Millisecond)
+	var protocolFactory thrift.TProtocolFactory
+	if binary {
+		protocolFactory = thrift.NewTBinaryProtocolFactoryDefault()
+	} else {
+		protocolFactory = thrift.NewTCompactProtocolFactory()
 	}
+	return agent.NewAgentClientFactory(clientTransport, protocolFactory), nil
+}
 
-	got := sink.AllTraces()
+// Cannot use the testdata because timestamps are nanoseconds.
+func generateTraceData() pdata.Traces {
+	td := pdata.NewTraces()
+	td.ResourceSpans().Resize(1)
+	td.ResourceSpans().At(0).Resource().Attributes().UpsertString(conventions.AttributeServiceName, "test")
+	td.ResourceSpans().At(0).InstrumentationLibrarySpans().Resize(1)
+	td.ResourceSpans().At(0).InstrumentationLibrarySpans().At(0).Spans().Resize(1)
+	span := td.ResourceSpans().At(0).InstrumentationLibrarySpans().At(0).Spans().At(0)
+	span.SetSpanID(pdata.NewSpanID([8]byte{0, 1, 2, 3, 4, 5, 6, 7}))
+	span.SetTraceID(pdata.NewTraceID([16]byte{0, 1, 2, 3, 4, 5, 6, 7, 7, 6, 5, 4, 3, 2, 1, 0}))
+	span.SetStartTime(1581452772000000000)
+	span.SetEndTime(1581452773000000000)
+	return td
+}
 
-	want := []consumerdata.TraceData{
-		{
-			Node: &commonpb.Node{
-				ServiceInfo: &commonpb.ServiceInfo{Name: "issaTest"},
-				LibraryInfo: &commonpb.LibraryInfo{},
-				Identifier:  &commonpb.ProcessIdentifier{},
-				Attributes: map[string]string{
-					"bool":   "true",
-					"string": "yes",
-					"int64":  "10000000",
-				},
-			},
-
-			Spans: []*tracepb.Span{
-				{
-					TraceId:      []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x80},
-					SpanId:       []byte{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8},
-					ParentSpanId: []byte{0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18},
-					Name:         &tracepb.TruncatableString{Value: "DBSearch"},
-					StartTime:    internal.TimeToTimestamp(now),
-					EndTime:      internal.TimeToTimestamp(nowPlus10min),
-					Status: &tracepb.Status{
-						Code:    trace.StatusCodeNotFound,
-						Message: "Stale indices",
-					},
-					Attributes: &tracepb.Span_Attributes{
-						AttributeMap: map[string]*tracepb.AttributeValue{
-							"error": {
-								Value: &tracepb.AttributeValue_BoolValue{BoolValue: true},
-							},
-						},
-					},
-					Links: &tracepb.Span_Links{
-						Link: []*tracepb.Span_Link{
-							{
-								TraceId: []byte{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-								SpanId:  []byte{0xCF, 0xCE, 0xCD, 0xCC, 0xCB, 0xCA, 0xC9, 0xC8},
-								Type:    tracepb.Span_Link_PARENT_LINKED_SPAN,
-							},
-						},
-					},
-				},
-				{
-					TraceId:   []byte{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-					SpanId:    []byte{0xCF, 0xCE, 0xCD, 0xCC, 0xCB, 0xCA, 0xC9, 0xC8},
-					Name:      &tracepb.TruncatableString{Value: "ProxyFetch"},
-					StartTime: internal.TimeToTimestamp(nowPlus10min),
-					EndTime:   internal.TimeToTimestamp(nowPlus10min2sec),
-					Status: &tracepb.Status{
-						Code:    trace.StatusCodeInternal,
-						Message: "Frontend crash",
-					},
-					Attributes: &tracepb.Span_Attributes{
-						AttributeMap: map[string]*tracepb.AttributeValue{
-							"error": {
-								Value: &tracepb.AttributeValue_BoolValue{BoolValue: true},
-							},
-						},
-					},
-					Links: &tracepb.Span_Links{
-						Link: []*tracepb.Span_Link{
-							{
-								TraceId: []byte{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80},
-								SpanId:  []byte{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8},
-								// TODO: (@pjanotti, @odeke-em) contact the Jaeger maintains to inquire about
-								// Parent_Linked_Spans as currently they've only got:
-								// * Child_of
-								// * Follows_from
-								// yet OpenCensus has Parent too but Jaeger uses a zero-value for LinkCHILD.
-								Type: tracepb.Span_Link_PARENT_LINKED_SPAN,
-							},
-						},
-					},
-				},
-			},
-			SourceFormat: "jaeger",
-		},
+func modelToThrift(batch *model.Batch) *jaegerthrift.Batch {
+	return &jaegerthrift.Batch{
+		Process: processModelToThrift(batch.Process),
+		Spans:   jaegerconvert.FromDomain(batch.Spans),
 	}
+}
 
-	assert.EqualValues(t, want, got)
+func processModelToThrift(process *model.Process) *jaegerthrift.Process {
+	if process == nil {
+		return nil
+	}
+	return &jaegerthrift.Process{
+		ServiceName: process.ServiceName,
+	}
 }

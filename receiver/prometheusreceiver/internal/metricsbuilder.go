@@ -1,10 +1,10 @@
-// Copyright 2019, OpenTelemetry Authors
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//       http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,28 +17,24 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
-	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/textparse"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	metricsSuffixCount      = "_count"
-	metricsSuffixBucket     = "_bucket"
-	metricsSuffixSum        = "_sum"
-	startTimeMetricName     = "process_start_time_seconds"
-	scrapeLatencyMetricName = "scrape_duration_seconds"
-	scrapeStatusMetricName  = "up"
-	scrapeStatusOk          = "200"
-	// The 'up' metric only reports whether or not the scrape succeeded - in the case that
-	// it fails, we set the status to '404', which is the most generic failure status.
-	scrapeStatusErr = "404"
+	metricsSuffixCount  = "_count"
+	metricsSuffixBucket = "_bucket"
+	metricsSuffixSum    = "_sum"
+	startTimeMetricName = "process_start_time_seconds"
+	scrapeUpMetricName  = "up"
 )
 
 var (
@@ -51,59 +47,74 @@ var (
 )
 
 type metricBuilder struct {
-	hasData            bool
-	hasInternalMetric  bool
-	mc                 MetadataCache
-	metrics            []*metricspb.Metric
-	numTimeseries      int
-	droppedTimeseries  int
-	useStartTimeMetric bool
-	startTime          float64
-	scrapeLatencyMs    float64
-	scrapeStatus       string
-	logger             *zap.Logger
-	currentMf          MetricFamily
+	hasData              bool
+	hasInternalMetric    bool
+	mc                   MetadataCache
+	metrics              []*metricspb.Metric
+	numTimeseries        int
+	droppedTimeseries    int
+	useStartTimeMetric   bool
+	startTimeMetricRegex *regexp.Regexp
+	startTime            float64
+	logger               *zap.Logger
+	currentMf            MetricFamily
 }
 
 // newMetricBuilder creates a MetricBuilder which is allowed to feed all the datapoints from a single prometheus
 // scraped page by calling its AddDataPoint function, and turn them into an opencensus data.MetricsData object
 // by calling its Build function
-func newMetricBuilder(mc MetadataCache, useStartTimeMetric bool, logger *zap.Logger) *metricBuilder {
-
-	return &metricBuilder{
-		mc:                 mc,
-		metrics:            make([]*metricspb.Metric, 0),
-		logger:             logger,
-		numTimeseries:      0,
-		droppedTimeseries:  0,
-		useStartTimeMetric: useStartTimeMetric,
+func newMetricBuilder(mc MetadataCache, useStartTimeMetric bool, startTimeMetricRegex string, logger *zap.Logger) *metricBuilder {
+	var regex *regexp.Regexp
+	if startTimeMetricRegex != "" {
+		regex, _ = regexp.Compile(startTimeMetricRegex)
 	}
+	return &metricBuilder{
+		mc:                   mc,
+		metrics:              make([]*metricspb.Metric, 0),
+		logger:               logger,
+		numTimeseries:        0,
+		droppedTimeseries:    0,
+		useStartTimeMetric:   useStartTimeMetric,
+		startTimeMetricRegex: regex,
+	}
+}
+
+func (b *metricBuilder) matchStartTimeMetric(metricName string) bool {
+	if b.startTimeMetricRegex != nil {
+		return b.startTimeMetricRegex.MatchString(metricName)
+	}
+
+	return metricName == startTimeMetricName
 }
 
 // AddDataPoint is for feeding prometheus data complexValue in its processing order
 func (b *metricBuilder) AddDataPoint(ls labels.Labels, t int64, v float64) error {
 	metricName := ls.Get(model.MetricNameLabel)
-	if metricName == "" {
+	switch {
+	case metricName == "":
 		b.numTimeseries++
 		b.droppedTimeseries++
 		return errMetricNameNotFound
-	} else if isInternalMetric(metricName) {
+	case isInternalMetric(metricName):
 		b.hasInternalMetric = true
 		lm := ls.Map()
 		delete(lm, model.MetricNameLabel)
-		switch metricName {
-		case scrapeStatusMetricName:
-			if v == 1.0 {
-				b.scrapeStatus = scrapeStatusOk
+		// See https://www.prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series
+		// up: 1 if the instance is healthy, i.e. reachable, or 0 if the scrape failed.
+		if metricName == scrapeUpMetricName && v != 1.0 {
+			if v == 0.0 {
+				b.logger.Warn("Failed to scrape Prometheus endpoint",
+					zap.Int64("scrape_timestamp", t),
+					zap.String("target_labels", fmt.Sprintf("%v", lm)))
 			} else {
-				b.scrapeStatus = scrapeStatusErr
-				b.logger.Warn("http client error", zap.Int64("timestamp", t), zap.Float64("value", v), zap.String("labels", fmt.Sprintf("%v", lm)))
+				b.logger.Warn("The 'up' metric contains invalid value",
+					zap.Float64("value", v),
+					zap.Int64("scrape_timestamp", t),
+					zap.String("target_labels", fmt.Sprintf("%v", lm)))
 			}
-		case scrapeLatencyMetricName:
-			b.scrapeLatencyMs = v * 1000
 		}
 		return nil
-	} else if b.useStartTimeMetric && metricName == startTimeMetricName {
+	case b.useStartTimeMetric && b.matchStartTimeMetric(metricName):
 		b.startTime = v
 	}
 
@@ -192,12 +203,13 @@ func normalizeMetricName(name string) string {
 
 func getBoundary(metricType metricspb.MetricDescriptor_Type, labels labels.Labels) (float64, error) {
 	labelName := ""
-	if metricType == metricspb.MetricDescriptor_CUMULATIVE_DISTRIBUTION ||
-		metricType == metricspb.MetricDescriptor_GAUGE_DISTRIBUTION {
+	switch metricType {
+	case metricspb.MetricDescriptor_CUMULATIVE_DISTRIBUTION,
+		metricspb.MetricDescriptor_GAUGE_DISTRIBUTION:
 		labelName = model.BucketLabel
-	} else if metricType == metricspb.MetricDescriptor_SUMMARY {
+	case metricspb.MetricDescriptor_SUMMARY:
 		labelName = model.QuantileLabel
-	} else {
+	default:
 		return 0, errNoBoundaryLabel
 	}
 
@@ -214,18 +226,19 @@ func convToOCAMetricType(metricType textparse.MetricType) metricspb.MetricDescri
 	case textparse.MetricTypeCounter:
 		// always use float64, as it's the internal data type used in prometheus
 		return metricspb.MetricDescriptor_CUMULATIVE_DOUBLE
-	case textparse.MetricTypeGauge:
+	// textparse.MetricTypeUnknown is converted to gauge by default to fix Prometheus untyped metrics from being dropped
+	case textparse.MetricTypeGauge, textparse.MetricTypeUnknown:
 		return metricspb.MetricDescriptor_GAUGE_DOUBLE
 	case textparse.MetricTypeHistogram:
 		return metricspb.MetricDescriptor_CUMULATIVE_DISTRIBUTION
 	// dropping support for gaugehistogram for now until we have an official spec of its implementation
 	// a draft can be found in: https://docs.google.com/document/d/1KwV0mAXwwbvvifBvDKH_LU1YjyXE_wxCkHNoCGq1GX0/edit#heading=h.1cvzqd4ksd23
-	//case textparse.MetricTypeGaugeHistogram:
+	// case textparse.MetricTypeGaugeHistogram:
 	//	return metricspb.MetricDescriptor_GAUGE_DISTRIBUTION
 	case textparse.MetricTypeSummary:
 		return metricspb.MetricDescriptor_SUMMARY
 	default:
-		// including: textparse.MetricTypeUnknown, textparse.MetricTypeInfo, textparse.MetricTypeStateset
+		// including: textparse.MetricTypeInfo, textparse.MetricTypeStateset
 		return metricspb.MetricDescriptor_UNSPECIFIED
 	}
 }
@@ -276,16 +289,16 @@ func heuristicalMetricAndKnownUnits(metricName, parsedUnit string) string {
 	return unit
 }
 
-func timestampFromMs(timeAtMs int64) *timestamp.Timestamp {
+func timestampFromMs(timeAtMs int64) *timestamppb.Timestamp {
 	secs, ns := timeAtMs/1e3, (timeAtMs%1e3)*1e6
-	return &timestamp.Timestamp{
+	return &timestamppb.Timestamp{
 		Seconds: secs,
 		Nanos:   int32(ns),
 	}
 }
 
 func isInternalMetric(metricName string) bool {
-	if metricName == "up" || strings.HasPrefix(metricName, "scrape_") {
+	if metricName == scrapeUpMetricName || strings.HasPrefix(metricName, "scrape_") {
 		return true
 	}
 	return false
