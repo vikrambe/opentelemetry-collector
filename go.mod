@@ -4,7 +4,6 @@ go 1.14
 
 require (
 	contrib.go.opencensus.io/exporter/prometheus v0.2.0
-	github.com/HdrHistogram/hdrhistogram-go v0.9.0 // indirect
 	github.com/OneOfOne/xxhash v1.2.5 // indirect
 	github.com/Shopify/sarama v1.27.2
 	github.com/antonmedv/expr v1.8.9
@@ -45,7 +44,7 @@ require (
 	github.com/prometheus/common v0.14.0
 	github.com/prometheus/prometheus v1.8.2-0.20201105135750-00f16d1ac3a4
 	github.com/rs/cors v1.7.0
-	github.com/securego/gosec/v2 v2.4.0
+	github.com/securego/gosec/v2 v2.7.0
 	github.com/shirou/gopsutil v3.20.10+incompatible
 	github.com/soheilhy/cmux v0.1.4
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
@@ -60,14 +59,14 @@ require (
 	go.uber.org/atomic v1.7.0
 	go.uber.org/zap v1.16.0
 	golang.org/x/oauth2 v0.0.0-20200902213428-5d25da1a8d43
-	golang.org/x/sys v0.0.0-20201008064518-c1f3e3309c71
-	golang.org/x/text v0.3.3
-	golang.org/x/tools v0.0.0-20201008025239-9df69603baec
+	golang.org/x/sys v0.0.0-20210228012217-479acdf4ea46
+	golang.org/x/text v0.3.5
+	golang.org/x/tools v0.1.0
 	google.golang.org/genproto v0.0.0-20200904004341-0bd0a958aa1d
 	google.golang.org/grpc v1.33.1
 	google.golang.org/grpc/examples v0.0.0-20200728065043-dfc0c05b2da9 // indirect
 	google.golang.org/protobuf v1.25.0
 	gopkg.in/square/go-jose.v2 v2.5.1 // indirect
-	gopkg.in/yaml.v2 v2.3.0
+	gopkg.in/yaml.v2 v2.4.0
 	honnef.co/go/tools v0.0.1-2020.1.6
 )
